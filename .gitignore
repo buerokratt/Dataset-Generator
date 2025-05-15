@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+
+# Virtual Environment
+venv/
+ENV/
+.env
+
+# IDE files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+
+# Project specific
+logs/
+*.log
+output_datasets_new/
+datasets/
+
+# MLflow related
+mlflow_data/
+mlflow_artifacts/
+mlflow_temp/
+
+# Docker volumes
+ollama_models/
+
+# Data files
+data/*.txt
+output_datasets_new/
+**/metadata.json
+
+# Temporary files
+*.tmp
+.coverage
+htmlcov/
+
+# Config files that might contain sensitive information
+config/*.env
+*.pem
+*.key
+
+# Large model files
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# Keep example data files
+!data/data.md
+
+# Other
+.directory
+*.swp
+*~

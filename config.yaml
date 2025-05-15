@@ -1,0 +1,37 @@
+# API connection settings
+api:
+  url: "http://localhost:8000"
+  timeout_seconds: 30  # Optional timeout for API requests
+
+# Directory paths
+directories:
+  input: "data"              # Root directory containing source data files
+  output: "output_datasets_new"  # Root directory where generated datasets will be saved
+  
+# QA pairs generation settings
+faqs:
+  structure_name: "single_question"
+  prompt_template_name: "institute_topic_question"
+  num_examples: 5
+  parameters:
+    redundancy_factor: 0
+    difficulty: "intermediate"
+    language: "et"  # Estonian
+
+# Conversations generation settings
+conversations:
+  structure_name: "topic_conversations"
+  prompt_template_name: "institute_topic_conversation"
+  num_examples: 3
+  parameters:
+    redundancy_factor: 0
+    num_turns: 6
+    difficulty: "intermediate"
+    language: "et"  # Estonian
+
+# Processing settings
+processing:
+  wait_between_requests: 1  # Seconds to wait between API requests
+
+mlflow:
+  experiment_name: "synthetic_data_generation"
