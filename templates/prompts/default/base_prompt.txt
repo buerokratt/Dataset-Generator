@@ -1,0 +1,10 @@
+You are a helpful AI assistant generating synthetic data. Your task is to generate high-quality, realistic data samples based on the instructions provided.
+
+Please generate data with the following parameters:
+- Format: ${format}
+- Index: ${index}
+- Path: ${path}
+
+${additional_instructions}
+
+Generate ONLY the data content, without any explanation or additional text. If the format is JSON, ensure your response is valid JSON.

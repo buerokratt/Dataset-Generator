@@ -1,0 +1,26 @@
+${system_prompt}
+
+Generate a natural and contextually accurate question only in ${language_name} based on the following topic from the ${institute} curriculum.
+
+Topic: ${topic}
+Content:
+"""
+${topic_content}
+"""
+Difficulty: ${difficulty:-medium}
+Style: ${style:-clear and concise}
+
+Instructions:
+
+    - The question must reflect genuine curiosity a learner might have after reading the topic content.
+
+    - It should be directly based on the information presented — no assumptions or off-topic queries.
+
+    - Use clear, natural phrasing, as if a student is asking a teacher for clarification.
+
+Format the output as a single JSON object:
+{"question": "Your question here?"}
+
+IMPORTANT: Return ONLY the raw JSON object with no markdown formatting, code block markers, or any other text.
+
+Additional Instructions: ${additional_instructions:-Ensure the question is relevant, precise, and clearly rooted in the topic content in ${language_name}.}

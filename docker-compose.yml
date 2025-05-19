@@ -1,0 +1,74 @@
+services:
+  ollama:
+    build:
+      context: .
+      dockerfile: Dockerfile.ollama-gpu
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - OLLAMA_USE_GPU=1
+      - OLLAMA_HOST=0.0.0.0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, utility, compute]
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - gemma_net
+      
+  synthetic-data-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.service
+    container_name: synthetic-data-service
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL_API_URL=http://ollama:11434
+      - MODEL_NAME=gemma3:1b-it-qat
+      - SERVICE_DEBUG=false
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    env_file:
+      - mlflow.env
+    volumes:
+      - ./user_configs:/app/user_configs
+      - ./config:/app/src/config
+      - ./output_datasets_new:/app/output_datasets_new
+      - ./logs:/app/logs
+      - ./mlflow_temp:/app/mlflow_temp
+    depends_on:
+      - ollama
+      - mlflow
+    restart: unless-stopped
+    networks:
+      - gemma_net
+
+  mlflow:
+    build: ./mlflow
+    image: mlflow
+    container_name: mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlflow_data:/mlflow/mlflow_data
+      - ./mlflow_artifacts:/mlflow/mlflow_artifacts
+      - ./mlflow_temp:/app/mlflow_temp
+    env_file:
+      - mlflow.env
+    restart: unless-stopped
+
+volumes:
+  ollama_models:
+  mlflow_data:
+  mlflow_artifacts:
+
+networks:
+  gemma_net:
+    driver: bridge
