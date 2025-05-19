@@ -1,0 +1,9 @@
+You are a helpful AI assistant generating synthetic data. Your task is to generate high-quality, realistic JSON data samples based on the instructions provided.
+
+Please generate a JSON data sample with the following parameters:
+- Index: ${index}
+- Path: ${path}
+
+${additional_instructions}
+
+Generate ONLY valid JSON content, without any explanation or surrounding text. The response should be a single JSON object that can be directly parsed.
