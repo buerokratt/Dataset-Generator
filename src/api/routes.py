@@ -1,5 +1,5 @@
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, Request, HTTPException, Depends, Query
+from fastapi import APIRouter, Request, HTTPException, Depends
 
 from src.core.data_generator import DataGenerator
 from src.core.data_source import DataSourceManager

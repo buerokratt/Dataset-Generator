@@ -1,8 +1,6 @@
 import os
 import mlflow
 import json
-import time
-from pathlib import Path
 from src.utils.logger import logger
 
 class MLflowTracker:

@@ -4,7 +4,6 @@ import json
 import time
 from pathlib import Path
 
-from src.core.providers.base import ModelProvider
 from src.core.providers.factory import get_provider
 from src.core.template_registry import TemplateRegistry
 from src.core.prompt_processor import PromptProcessor
@@ -183,14 +182,6 @@ class DataGenerator:
         logger.info(f"Dataset generation completed: {output_dir}")
         return str(output_dir)
     
-    # def _create_directory_structure(self, base_dir: str, structure_node: Dict[str, Any]) -> None:
-    #      """Create directory structure based on 'subdirectories' in a node."""
-    #      if 'subdirectories' in structure_node and structure_node['subdirectories']:
-    #          for name, content in structure_node['subdirectories'].items():
-    #              dir_path = Path(base_dir) / name
-    #              dir_path.mkdir(parents=True, exist_ok=True)
-    #              self._create_directory_structure(str(dir_path), content) 
-    
     def _generate_data(
         self,
         output_dir: str,
@@ -268,8 +259,10 @@ class DataGenerator:
                         if extracted:
                              try:
                                  parsed = json.loads(extracted)
-                                 if isinstance(parsed, list): generated_items.extend(parsed)
-                                 else: generated_items.append(parsed)
+                                 if isinstance(parsed, list): 
+                                     generated_items.extend(parsed)
+                                 else: 
+                                     generated_items.append(parsed)
                              except json.JSONDecodeError:
                                  logger.warning(f"Extracted content still not JSON: {extracted[:100]}...")
                                  # generated_items.append({"error": "invalid_json", "raw": content})
@@ -368,6 +361,8 @@ class DataGenerator:
         normalized_key = relative_file_key.replace(os.sep, "_")
         count_param = f"{normalized_key}_count"
         if count_param in parameters:
-            try: return int(parameters[count_param])
-            except (ValueError, TypeError): logger.warning(f"Invalid count for {count_param}")
+            try: 
+                return int(parameters[count_param])
+            except (ValueError, TypeError): 
+                logger.warning(f"Invalid count for {count_param}")
         return total_examples

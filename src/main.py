@@ -1,7 +1,6 @@
 # Update your main.py to load configuration including the provider section
 import argparse
 import yaml
-from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -71,7 +70,7 @@ def main():
         logger.error("Failed to load configuration")
         return 1
     
-    logger.info(f"Configuration loaded successfully")
+    logger.info("Configuration loaded successfully")
     
     # Create FastAPI app
     app = create_app(config)

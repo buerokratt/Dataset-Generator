@@ -591,7 +591,6 @@ class PatternBasedTraversalStrategy(DataSourceTraversalStrategy):
         Yields:
             DataSource objects for matching files
         """
-        base_dir = Path(base_path)
         
         for pattern in self.patterns:
             pattern_path = os.path.join(base_path, pattern)
