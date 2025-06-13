@@ -58,10 +58,20 @@ class PromptProcessor:
         # Use string.Template for parameter substitution
         try:
             template_obj = Template(template)
-            return template_obj.safe_substitute(params)
+            processed = template_obj.safe_substitute(params)
+            
+            # Check for unresolved variables
+            unresolved_vars = re.findall(r'\$\{([^}]+)\}', processed)
+            if unresolved_vars:
+                logger.warning(f"Unresolved template variables: {unresolved_vars}")
+                logger.debug(f"Available parameters: {list(params.keys())}")
+                
+                # Optionally, you could use substitute() instead to raise KeyError
+                # processed = template_obj.substitute(params)
+                
+            return processed
         except Exception as e:
             logger.error(f"Error processing template: {e}")
-            # Fall back to original template if there's an error
             return template
 
     def extract_json(self, text: str) -> str:

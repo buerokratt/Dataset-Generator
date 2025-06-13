@@ -297,6 +297,7 @@ async def process_single_dataset(
                 source_params["file_path"] = source.path
                 source_params["file_content"] = source.content
                 source_params["file_name"] = source.name
+                
 
                 for key, value in source.metadata.items():
                     if key not in source_params:
@@ -515,11 +516,10 @@ async def background_generate_bulk(
 ):
     """Background task for bulk dataset generation"""
     try:
-        # ... existing validation code ...
 
         # Process each dataset - COLLECT all output paths across ALL datasets
         all_results = []
-        all_cross_dataset_output_paths = []  # NEW: Collect ALL output paths for final aggregation
+        all_cross_dataset_output_paths = []
         successful_count = 0
         failed_count = 0
         common_output_filename = None
