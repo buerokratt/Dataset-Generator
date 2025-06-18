@@ -1,0 +1,138 @@
+# Evaluation Pipeline Configuration
+
+
+# General settings
+general:
+  output_dir: "evaluation_results"
+  stopwords_file: "data/estonian-stopwords.txt"
+
+# File structure configuration
+file_structure:
+  # Directory structure
+  root_dir: "../../data"
+  output_dir: "output"
+  # Conversation files configuration
+  conversation_dir: "../../output_datasets/conversations"              # Root directory containing conversation files
+  conversation_file_pattern: "conversations.json"  # Pattern to match conversation files
+  check_json_fallback: true
+  prefer_json: true  # Prioritize finding JSON conversation files
+  # JSON format configuration for conversations
+  conversation_json_format: "messages"  # Indicates messages array format
+  conversation_speaker_key: "role"      # Field identifying the speaker role
+  conversation_content_key: "content"   # Field containing the message content
+  # Simple topic directory structure (agency/topic.txt)
+  simplified_topic_structure: true  # Enable simple topic structure handling
+  # Topic document files configuration
+  topic_dir: "../../data"                     # Root directory containing topic documents
+  topic_file_pattern: "*.txt"           # Pattern to match topic document files
+  agency_subdir_pattern: "*"
+  topic_subdir_pattern: "*"
+  # Topic-agency matching settings
+  normalize_agency_names: true  # Enable agency name normalization
+  normalize_underscore_to_space: false  # Convert underscores to spaces
+  remove_output_prefix: true  # Remove "output_" prefix from agency names
+  # For JSON-based topic structure
+  topic_json_path: ""                   # Path to JSON file containing topics, if applicable
+  topic_json_key: "topics"              # Key to access topics in JSON
+
+
+# Model settings
+models:
+  embedding_model: "paraphrase-multilingual-mpnet-base-v2"
+  qualitative_model: "google/gemma-2-2b-it"
+  use_4bit_quantization: true
+
+# Language settings
+language:
+  stopwords_file: "data/estonian-stopwords.txt"
+
+# Information Coverage Analysis
+information_coverage:
+  enabled: true
+  similarity_threshold: 0.5
+
+
+# Length Appropriateness Analysis
+length_appropriateness:
+  enabled: true
+  simple_turn_threshold: 2
+  simple_turn_min: 1
+  simple_turn_ideal: 2
+  moderate_turn_threshold: 3
+  moderate_turn_min: 2
+  moderate_turn_ideal: 4
+  complex_turn_threshold: 4
+  complex_turn_min: 3
+  complex_turn_ideal: 5
+  overall_complexity_simple: 0.33
+  overall_complexity_moderate: 0.66
+
+# Relevance Score Analysis
+relevance_score:
+  enabled: true
+  embedding_model: "paraphrase-multilingual-mpnet-base-v2"
+  segment_weight: 0.6
+  query_weight: 0.3
+  term_weight: 0.1
+  threshold_good: 0.7
+  threshold_acceptable: 0.5
+  min_df: 1
+  max_df: 0.9
+  ngram_range: (1, 2)
+
+# Query Diversity Analysis
+query_diversity:
+  enabled: true
+  embedding_model: "paraphrase-multilingual-mpnet-base-v2"
+  semantic_similarity_threshold: 0.8
+  min_queries_for_analysis: 3
+  ngram_range : (2, 3)
+  min_df: 1
+  max_df: 0.9
+
+# Redundancy Analysis
+redundancy_penalty:
+  enabled: true
+  embedding_model: "paraphrase-multilingual-mpnet-base-v2"
+  intra_conversation_similarity_threshold: 0.8
+  inter_conversation_similarity_threshold: 0.7
+
+# Topic Consistency Analysis
+topic_consistency:
+  enabled: true
+  embedding_model: "paraphrase-multilingual-mpnet-base-v2"
+  min_segment_length: 100
+  max_segment_length: 200
+
+# Topic Coverage Analysis
+topic_coverage:
+  enabled: true
+  embedding_model: "paraphrase-multilingual-mpnet-base-v2"
+  min_segment_length: 100
+  max_segment_length: 300
+  min_topic_size: 3
+  clustering_threshold: 0.25
+
+# Agency Confusion Analysis
+agency_confusion:
+  enabled: true
+  embedding_model: "paraphrase-multilingual-mpnet-base-v2"
+  confusion_threshold: 0.85
+  top_confusion_samples: 10
+  
+
+# Qualitative Evaluation
+qualitative_evaluation:
+  enabled: false
+  prompt_file: "data/prompts/qualitative_prompt.json"
+  prompt_file_topic: "data/prompts/qualitative_topic_prompt.json"
+  max_new_tokens: 1024
+  temperature: 0.1
+  full_evaluation: false  # Set to true for comprehensive evaluation
+
+# Thresholds for final grades
+grade_thresholds:
+  excellent: 0.85
+  good: 0.75
+  acceptable: 0.65
+  poor: 0.5
