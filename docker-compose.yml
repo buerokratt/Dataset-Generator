@@ -1,8 +1,11 @@
+version: '3'
+
 services:
   ollama:
     build:
       context: .
       dockerfile: Dockerfile.ollama-gpu
+    image: synthesisai/dataset-generator-ollama:latest
     container_name: ollama
     ports:
       - "11434:11434"
@@ -19,56 +22,57 @@ services:
               capabilities: [gpu, utility, compute]
     volumes:
       - ollama_models:/root/.ollama
+      - ./scripts:/scripts
     restart: unless-stopped
     networks:
-      - gemma_net
-      
+      - dataset_gen_net
+
   synthetic-data-service:
     build:
       context: .
       dockerfile: Dockerfile.service
+    image: synthesisai/dataset-generator:latest
     container_name: synthetic-data-service
     ports:
       - "8000:8000"
     environment:
-      - MODEL_API_URL=http://ollama:11434
+      - PROVIDER_NAME=ollama
       - MODEL_NAME=gemma3:1b-it-qat
+      - PROVIDER_API_URL=http://ollama:11434
       - SERVICE_DEBUG=false
       - MLFLOW_TRACKING_URI=http://mlflow:5000
-    env_file:
-      - mlflow.env
     volumes:
+      - ./config:/app/config
+      - ./templates:/app/templates
       - ./user_configs:/app/user_configs
-      - ./config:/app/src/config
-      - ./output_datasets_new:/app/output_datasets_new
+      - ./data:/app/data
+      - ./output_datasets:/app/output_datasets
       - ./logs:/app/logs
-      - ./mlflow_temp:/app/mlflow_temp
     depends_on:
       - ollama
       - mlflow
     restart: unless-stopped
     networks:
-      - gemma_net
+      - dataset_gen_net
 
   mlflow:
-    build: ./mlflow
-    image: mlflow
+    build:
+      context: ./mlflow
+      dockerfile: Dockerfile
+    image: synthesisai/dataset-generator-mlflow:latest
     container_name: mlflow
     ports:
       - "5000:5000"
     volumes:
       - ./mlflow_data:/mlflow/mlflow_data
       - ./mlflow_artifacts:/mlflow/mlflow_artifacts
-      - ./mlflow_temp:/app/mlflow_temp
-    env_file:
-      - mlflow.env
     restart: unless-stopped
+    networks:
+      - dataset_gen_net
 
 volumes:
   ollama_models:
-  mlflow_data:
-  mlflow_artifacts:
 
 networks:
-  gemma_net:
+  dataset_gen_net:
     driver: bridge
