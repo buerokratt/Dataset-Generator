@@ -1,16 +1,15 @@
-from typing import Dict, Any, Optional, List
+from typing import Optional, List
 from fastapi import APIRouter, Request, HTTPException, Depends, BackgroundTasks
 import httpx
 from src.core.data_generator import DataGenerator
 from src.core.data_source import DataSourceManager
 from src.core.post_processor_factory import PostProcessorFactory
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from src.utils.logger import logger
-import os
 import time
 import uuid
-from pathlib import Path
 import asyncio
+import re
 
 router = APIRouter()
 
@@ -18,11 +17,33 @@ router = APIRouter()
 task_status_store = {}
 
 class DatasetRequest(BaseModel):
+    """
+    This schema defines the parameters required to generate a synthetic dataset from a specific data source.
+    It is used as part of bulk dataset generation requests and supports validation of input fields.
+    """
     data_path: str = Field(..., description="Path to the data source")
     output_filename: Optional[str] = Field(None, description="Custom output filename")
     
     class Config:
         extra = "allow"  # Allow additional fields like agency_id, etc.
+
+    @validator('data_path')
+    def validate_data_path(cls, v):
+        if not v or not v.strip():
+            raise ValueError('data_path cannot be empty')
+        if '..' in v:
+            raise ValueError('data_path contains invalid characters')
+        return v.strip()
+    
+    @validator('output_filename')
+    def validate_output_filename(cls, v):
+        if v is not None:
+            if not v or not v.strip():
+                raise ValueError('output_filename cannot be empty if provided')
+            
+            if not re.match(r'^[a-zA-Z0-9_-]+$', v.strip()):
+                raise ValueError('output_filename contains invalid characters')
+        return v.strip() if v else None
 
 class BulkGenerateRequest(BaseModel):
     datasets: List[DatasetRequest] = Field(..., description="List of datasets to generate")
@@ -82,149 +103,7 @@ async def send_callback(callback_url: str, payload: dict, max_retries: int = 3):
             if attempt == max_retries - 1:
                 logger.error(f"All callback attempts failed for {callback_url}")
             else:
-                await asyncio.sleep(2 ** attempt)  # Exponential backoff
-
-# async def process_single_dataset(
-#     dataset_request: DatasetRequest,
-#     config: dict,
-#     data_generator: DataGenerator,
-#     task_id: str
-# ) -> dict:
-#     """Process a single dataset request"""
-#     try:
-#         dataset_config = config.get("dataset_generation", {})
-        
-#         # Extract all parameters from config
-#         structure_name = dataset_config.get("structure_name")
-#         prompt_template_name = dataset_config.get("prompt_template_name")
-#         traversal_strategy = dataset_config.get("traversal_strategy")
-#         num_examples = dataset_config.get("num_samples")
-#         output_format = dataset_config.get("output_format")
-#         parameters = dataset_config.get("parameters", {})
-#         filter_config = dataset_config.get("filter", {})
-#         post_processing_type = dataset_config.get("post_processing", "zip")
-        
-#         # Override output_filename if provided in request
-#         modified_config = config.copy()
-#         if dataset_request.output_filename:
-#             modified_config["dataset_generation"] = dataset_config.copy()
-            
-#             if "aggregation" not in modified_config["dataset_generation"]:
-#                 modified_config["dataset_generation"]["aggregation"] = {}
-#             else:
-#                 modified_config["dataset_generation"]["aggregation"] = dataset_config.get("aggregation", {}).copy()
-            
-#             modified_config["dataset_generation"]["aggregation"]["output_filename"] = dataset_request.output_filename
-
-#         data_path = dataset_request.data_path
-#         output_dir = config.get("directories", {}).get("output")
-
-#         # Create data source manager
-#         source_manager = DataSourceManager()
-
-#         # Load all matching sources
-#         data_sources = source_manager.load_sources(
-#             base_path=data_path,
-#             strategy_name=traversal_strategy,
-#             filter_config=filter_config,
-#         )
-
-#         if not data_sources:
-#             return {
-#                 "success": False,
-#                 "error": f"No data sources found matching the criteria in {data_path}",
-#                 "dataset_metadata": dataset_request.dict(),
-#                 "results": []
-#             }
-
-#         logger.info(f"Found {len(data_sources)} data sources to process for {data_path}")
-
-#         # Track all output paths for post-processing
-#         all_output_paths = []
-#         results = []
-
-#         for source in data_sources:
-#             # Extract metadata for parameters
-#             source_params = parameters.copy()
-
-#             # Add source metadata to parameters
-#             if traversal_strategy == "institutional":
-#                 source_params["institution"] = source.metadata.get("institution", "unknown")
-#                 source_params["topic"] = source.metadata.get("topic", "unknown")
-#                 source_params["topic_content"] = source.content
-#             else:
-#                 source_params["file_path"] = source.path
-#                 source_params["file_content"] = source.content
-#                 source_params["file_name"] = source.name
-
-#                 for key, value in source.metadata.items():
-#                     if key not in source_params:
-#                         source_params[key] = value
-
-#             # Generate dataset for this source
-#             timestamp = time.strftime("%Y%m%d_%H%M%S")
-
-#             # Determine output path based on metadata
-#             if traversal_strategy == "institutional":
-#                 institution = source.metadata.get("institution", "unknown")
-#                 topic = source.metadata.get("topic", "unknown")
-#                 output_base_path = f"{output_dir}/{structure_name}/{institution}/{topic}_{timestamp}"
-#             else:
-#                 rel_path = source.metadata.get("relative_path", source.name)
-#                 output_base_path = f"{output_dir}/{structure_name}/{rel_path}_{timestamp}"
-
-#             logger.info(f"Generating dataset for source: {source.path} -> {output_base_path}")
-
-#             # Generate dataset
-#             result_path = data_generator.generate(
-#                 structure_name=structure_name,
-#                 prompt_template_name=prompt_template_name,
-#                 output_base_path=output_base_path,
-#                 num_examples=num_examples,
-#                 output_format=output_format,
-#                 parameters=source_params,
-#             )
-
-#             all_output_paths.append(result_path)
-#             results.append({"source": source.path, "output_path": result_path})
-
-#         # Post-processing
-#         base_output_dir = f"{output_dir}/{structure_name}"
-#         post_processor = PostProcessorFactory.create_post_processor(modified_config)
-#         final_output_path = post_processor.process(all_output_paths, base_output_dir)
-
-#         if final_output_path:
-#             return {
-#                 "success": True,
-#                 "dataset_metadata": dataset_request.dict(),
-#                 "results": results,
-#                 "post_processing_type": post_processing_type,
-#                 "final_output_path": final_output_path,
-#                 "configuration_used": {
-#                     "structure_name": structure_name,
-#                     "prompt_template_name": prompt_template_name,
-#                     "traversal_strategy": traversal_strategy,
-#                     "num_examples": num_examples,
-#                     "output_format": output_format,
-#                     "post_processing": post_processing_type
-#                 }
-#             }
-#         else:
-#             return {
-#                 "success": False,
-#                 "error": "Post-processing failed",
-#                 "dataset_metadata": dataset_request.dict(),
-#                 "results": results
-#             }
-            
-#     except Exception as e:
-#         logger.exception(f"Error processing dataset {dataset_request.data_path}: {str(e)}")
-#         return {
-#             "success": False,
-#             "error": str(e),
-#             "dataset_metadata": dataset_request.dict(),
-#             "results": []
-#         }
+                await asyncio.sleep(2 ** attempt)
 
 async def process_single_dataset(
     dataset_request: DatasetRequest,
@@ -232,7 +111,29 @@ async def process_single_dataset(
     data_generator: DataGenerator,
     task_id: str
 ) -> dict:
-    """Process a single dataset request"""
+    """
+    Process a single dataset generation request.
+
+    This function handles the end-to-end logic for generating a synthetic dataset based on the parameters
+    provided in a DatasetRequest. It loads data sources according to the specified traversal strategy and filter,
+    applies the configured structure and prompt template, and invokes the DataGenerator to produce the dataset.
+    After generation, it optionally performs post-processing (such as zipping or aggregation) on the output files.
+
+    Args:
+        dataset_request (DatasetRequest): The dataset generation request containing source path, output filename, and other parameters.
+        config (dict): The full configuration dictionary, including dataset generation and directory settings.
+        data_generator (DataGenerator): The main generator instance used to create synthetic datasets.
+        task_id (str): The unique identifier for the current bulk generation task.
+
+    Returns:
+        dict: A dictionary containing the result of the dataset generation, including success status, output paths,
+              any errors encountered, and metadata about the dataset and configuration used.
+
+    Notes:
+        - Supports both individual and bulk post-processing modes (e.g., zip, aggregation).
+        - Handles validation and error reporting for missing data sources or configuration issues.
+        - Used internally by the bulk dataset generation API endpoint.
+    """
     try:
         dataset_config = config.get("dataset_generation", {})
         
@@ -393,133 +294,39 @@ async def process_single_dataset(
             "dataset_metadata": dataset_request.dict(),
         }
 
-# async def background_generate_bulk(
-#     task_id: str,
-#     request_data: BulkGenerateRequest,
-#     config: dict,
-#     data_generator: DataGenerator
-# ):
-#     """Background task for bulk dataset generation"""
-#     try:
-#         # Update task status to running
-#         task_status_store[task_id] = {
-#             "status": "running",
-#             "message": "Dataset generation in progress",
-#             "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-#             "total_datasets": len(request_data.datasets),
-#             "completed_datasets": 0,
-#             "results": [],
-#             "error": None
-#         }
-        
-#         logger.info(f"Starting background generation for task {task_id} with {len(request_data.datasets)} datasets")
-        
-#         # Validate dataset_generation config exists
-#         dataset_config = config.get("dataset_generation", {})
-#         if not dataset_config:
-#             task_status_store[task_id] = {
-#                 "status": "failed",
-#                 "message": "dataset_generation configuration not found in config file",
-#                 "completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-#                 "results": [],
-#                 "error": "Configuration error"
-#             }
-#             return
-
-#         # Validate required config values
-#         required_fields = {
-#             "structure_name": dataset_config.get("structure_name"),
-#             "prompt_template_name": dataset_config.get("prompt_template_name"),
-#             "traversal_strategy": dataset_config.get("traversal_strategy"),
-#             "num_samples": dataset_config.get("num_samples"),
-#             "output_format": dataset_config.get("output_format")
-#         }
-        
-#         missing_fields = [field for field, value in required_fields.items() if not value]
-#         if missing_fields:
-#             task_status_store[task_id] = {
-#                 "status": "failed",
-#                 "message": f"Missing required configuration fields: {missing_fields}",
-#                 "completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-#                 "results": [],
-#                 "error": "Configuration error"
-#             }
-#             return
-
-#         # Process each dataset
-#         all_results = []
-#         successful_count = 0
-#         failed_count = 0
-
-#         for i, dataset_request in enumerate(request_data.datasets):
-#             logger.info(f"Processing dataset {i+1}/{len(request_data.datasets)}: {dataset_request.data_path}")
-            
-#             result = await process_single_dataset(dataset_request, config, data_generator, task_id)
-#             all_results.append(result)
-            
-#             if result["success"]:
-#                 successful_count += 1
-#             else:
-#                 failed_count += 1
-            
-#             # Update progress
-#             task_status_store[task_id]["completed_datasets"] = i + 1
-#             task_status_store[task_id]["results"] = all_results
-
-#         # Final status update
-#         final_status = "completed" if failed_count == 0 else ("partial_success" if successful_count > 0 else "failed")
-        
-#         task_status_store[task_id].update({
-#             "status": final_status,
-#             "message": f"Processing completed. {successful_count} successful, {failed_count} failed",
-#             "completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-#             "successful_count": successful_count,
-#             "failed_count": failed_count,
-#             "results": all_results
-#         })
-        
-#         logger.info(f"Background generation completed for task {task_id}: {successful_count} successful, {failed_count} failed")
-        
-#         # Send callback if configured
-#         callback_config = config.get("callback", {})
-#         callback_url = callback_config.get("url")
-        
-#         if callback_url:
-#             callback_payload = {
-#                 "task_id": task_id,
-#                 "status": final_status,
-#                 "message": task_status_store[task_id]["message"],
-#                 "completed_at": task_status_store[task_id]["completed_at"],
-#                 "successful_count": successful_count,
-#                 "failed_count": failed_count,
-#                 "results": all_results
-#             }
-            
-#             logger.info(f"DEBUG: Sending simple callback to {callback_url}")
-#             await send_callback(callback_url, callback_payload)
-        
-#     except Exception as e:
-#         logger.exception(f"Error in background generation for task {task_id}: {str(e)}")
-#         task_status_store[task_id] = {
-#             "status": "failed",
-#             "message": f"Error generating bulk datasets: {str(e)}",
-#             "completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-#             "results": [],
-#             "error": str(e)
-#         }
-
 async def background_generate_bulk(
     task_id: str,
     request_data: BulkGenerateRequest,
     config: dict,
     data_generator: DataGenerator
 ):
-    """Background task for bulk dataset generation"""
-    try:
+    """
+    Background task for processing bulk dataset generation requests.
 
+    This function is executed as a background task to generate multiple datasets in parallel, based on the list of
+    DatasetRequest objects provided in the BulkGenerateRequest. It tracks progress and status using the task_id,
+    updates the task_status_store, and performs optional cross-dataset post-processing (such as aggregation or zipping).
+    Upon completion or failure, it updates the task status and can send a callback notification if configured.
+
+    Args:
+        task_id (str): Unique identifier for this bulk generation task, used for status tracking.
+        request_data (BulkGenerateRequest): The bulk request containing a list of dataset generation parameters.
+        config (dict): Application configuration, including dataset generation and post-processing settings.
+        data_generator (DataGenerator): Instance responsible for generating datasets from the provided parameters.
+
+    Raises:
+        Exception: Any error during processing is logged and updates the task status as failed.
+
+    Notes:
+        - Each dataset in the request is processed sequentially.
+        - Supports cross-dataset aggregation or zipping if configured.
+        - Internal results and metadata are managed for advanced post-processing.
+    """
+    try:
         # Process each dataset - COLLECT all output paths across ALL datasets
         all_results = []
         all_cross_dataset_output_paths = []
+        all_dataset_metadata = []  # NEW: Store metadata for each dataset
         successful_count = 0
         failed_count = 0
         common_output_filename = None
@@ -540,6 +347,9 @@ async def background_generate_bulk(
                 if "_internal_results" in result:
                     for individual_result in result["_internal_results"]:
                         all_cross_dataset_output_paths.append(individual_result["output_path"])
+                        # Extract metadata from dataset_request (convert to dict to include extra fields)
+                        metadata = dataset_request.dict()
+                        all_dataset_metadata.append(metadata)
             else:
                 failed_count += 1
             
@@ -547,7 +357,7 @@ async def background_generate_bulk(
             task_status_store[task_id]["completed_datasets"] = i + 1
             task_status_store[task_id]["results"] = all_results
 
-        # NEW: Final cross-dataset aggregation
+        # Enhanced cross-dataset aggregation with metadata
         final_aggregated_path = None
         if all_cross_dataset_output_paths and common_output_filename and config.get("dataset_generation", {}).get("post_processing") == "aggregation":
             logger.info(f"Performing cross-dataset aggregation for {len(all_cross_dataset_output_paths)} files")
@@ -564,14 +374,15 @@ async def background_generate_bulk(
             # Override with common output filename
             final_aggregation_config["dataset_generation"]["aggregation"]["output_filename"] = common_output_filename
             
-            # Perform final aggregation
+            # Perform final aggregation with metadata
             dataset_config = config.get("dataset_generation", {})
             structure_name = dataset_config.get("structure_name")
             output_dir = config.get("directories", {}).get("output")
             base_output_dir = f"{output_dir}/{structure_name}"
             
             final_post_processor = PostProcessorFactory.create_post_processor(final_aggregation_config)
-            final_aggregated_path = final_post_processor.process(all_cross_dataset_output_paths, base_output_dir)
+            # Pass dataset metadata to the processor
+            final_aggregated_path = final_post_processor.process(all_cross_dataset_output_paths, base_output_dir, all_dataset_metadata)
             
             logger.info(f"Cross-dataset aggregation completed: {final_aggregated_path}")
 

@@ -36,10 +36,19 @@ dataset_generation:
   num_samples: 10
   post_processing: "aggregation"  # Options: "zip", "aggregation"
   # Aggregation-specific configuration (only used when post_processing = "aggregation")
+  
+  # Aggregation-specific configuration
   aggregation:
     output_filename: "aggregated_faqs"
     merge_strategy: "combine_arrays"
     include_metadata: true
+    
+    # Default field mapping configuration
+    field_mapping:
+      enabled: false  # Disabled by default for backward compatibility
+      payload_to_output: {}  # Empty by default - external projects will override
+      defaults: {}  # Empty by default - external projects will override  
+      content_fields: []
   parameters:
     language: "et"
     temperature: 0.7

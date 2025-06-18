@@ -303,10 +303,8 @@ class DataGenerator:
                                 logger.warning(
                                     f"Extracted content still not JSON: {extracted[:100]}..."
                                 )
-                                # generated_items.append({"error": "invalid_json", "raw": content})
                         else:
-                            # generated_items.append({"error": "invalid_json", "raw": content})
-                            pass  # Skip invalid items silently or log
+                            continue
 
                 else:  # For text or other formats, append raw content
                     generated_items.append(content)

@@ -69,8 +69,100 @@ class ZipPostProcessor(PostProcessor):
 class AggregationPostProcessor(PostProcessor):
     """Post-processor that aggregates datasets into a single file."""
     
-    def process(self, output_paths: List[str], base_output_dir: str) -> Optional[str]:
-        """Aggregate datasets into a single file."""
+    def __init__(self, config: dict):
+        super().__init__(config)
+        self.field_mapping_config = config.get("dataset_generation", {}).get("aggregation", {}).get("field_mapping", {})
+    
+    def _aggregate_json_files(self, file_paths: List[str], merge_strategy: str, include_metadata: bool, dataset_metadata: List[dict] = None) -> Dict[str, Any]:
+        """Aggregate JSON files with dynamic field mapping."""
+        aggregated = {
+            "aggregated_data": [],
+            "source_files": [],
+            "total_items": 0
+        }
+        
+        if include_metadata:
+            aggregated["metadata"] = {
+                "aggregation_timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "merge_strategy": merge_strategy,
+                "source_count": len(file_paths)
+            }
+        
+        # Auto-increment counter for IDs
+        id_counter = 1
+        
+        for i, file_path in enumerate(file_paths):
+            try:
+                if not os.path.exists(file_path):
+                    logger.warning(f"File not found: {file_path}")
+                    continue
+                
+                dataset_dir = Path(file_path)
+                json_files = list(dataset_dir.glob("*.json"))
+                
+                # Get corresponding dataset metadata
+                current_dataset_metadata = dataset_metadata[i] if dataset_metadata and i < len(dataset_metadata) else {}
+                
+                for json_file in json_files:
+                    if json_file.name == "metadata.json":
+                        continue
+                    
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    # Process each item in the data
+                    items_to_add = data if isinstance(data, list) else [data]
+                    
+                    for item in items_to_add:
+                        # Apply field mapping
+                        mapped_item = self._apply_field_mapping(item, current_dataset_metadata, id_counter)
+                        aggregated["aggregated_data"].append(mapped_item)
+                        id_counter += 1
+                        aggregated["total_items"] += 1
+                        
+            except Exception as e:
+                logger.error(f"Error processing file {file_path}: {e}")
+                continue
+        
+        return aggregated
+    
+    def _apply_field_mapping(self, item: dict, dataset_metadata: dict, id_counter: int) -> dict:
+        """Apply field mapping configuration to transform the item."""
+        if not self.field_mapping_config.get("enabled", False):
+            return item
+        
+        mapped_item = {}
+        
+        # Apply payload to output mapping
+        payload_mapping = self.field_mapping_config.get("payload_to_output", {})
+        for payload_field, output_field in payload_mapping.items():
+            if payload_field in dataset_metadata:
+                mapped_item[output_field] = dataset_metadata[payload_field]
+        
+        # Apply defaults
+        defaults = self.field_mapping_config.get("defaults", {})
+        for field, default_value in defaults.items():
+            if field not in mapped_item:
+                if default_value == "auto_increment":
+                    mapped_item[field] = str(id_counter)
+                else:
+                    mapped_item[field] = default_value
+        
+        # Copy content fields from generated data
+        content_fields = self.field_mapping_config.get("content_fields", [])
+        for field in content_fields:
+            if field in item:
+                mapped_item[field] = item[field]
+        
+        # Copy any remaining fields from original item that aren't mapped
+        for key, value in item.items():
+            if key not in mapped_item:
+                mapped_item[key] = value
+        
+        return mapped_item
+    
+    def process(self, output_paths: List[str], base_output_dir: str, dataset_metadata: List[dict] = None) -> Optional[str]:
+        """Aggregate datasets into a single file with metadata support."""
         try:
             aggregation_config = self.config.get("dataset_generation", {}).get("aggregation", {})
             
@@ -86,7 +178,7 @@ class AggregationPostProcessor(PostProcessor):
             logger.info(f"Aggregating {len(output_paths)} datasets into {aggregated_path}")
             
             if output_format == "json":
-                aggregated_data = self._aggregate_json_files(output_paths, merge_strategy, include_metadata)
+                aggregated_data = self._aggregate_json_files(output_paths, merge_strategy, include_metadata, dataset_metadata)
                 with open(aggregated_path, 'w', encoding='utf-8') as f:
                     json.dump(aggregated_data, f, indent=2, ensure_ascii=False)
             else:
@@ -101,71 +193,12 @@ class AggregationPostProcessor(PostProcessor):
             logger.error(f"Error aggregating datasets: {e}")
             return None
     
-    def _aggregate_json_files(self, file_paths: List[str], merge_strategy: str, include_metadata: bool) -> Dict[str, Any]:
-        """Aggregate JSON files based on merge strategy."""
-        aggregated = {
-            "aggregated_data": [],
-            "source_files": [],
-            "total_items": 0
-        }
-        
-        if include_metadata:
-            import time
-            aggregated["metadata"] = {
-                "aggregation_timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "merge_strategy": merge_strategy,
-                "source_count": len(file_paths)
-            }
-        
-        for file_path in file_paths:
-            try:
-                if not os.path.exists(file_path):
-                    logger.warning(f"File not found: {file_path}")
-                    continue
-                
-                dataset_dir = Path(file_path)
-                json_files = list(dataset_dir.glob("*.json"))
-                
-                for json_file in json_files:
-                    if json_file.name == "metadata.json":
-                        continue
-                    
-                    with open(json_file, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    
-                    source_info = {
-                        "source_file": str(json_file),
-                        "relative_path": str(json_file.relative_to(dataset_dir.parent))
-                    }
-                    aggregated["source_files"].append(source_info)
-                    
-                    if merge_strategy == "combine_arrays":
-                        if isinstance(data, list):
-                            aggregated["aggregated_data"].extend(data)
-                            aggregated["total_items"] += len(data)
-                        else:
-                            aggregated["aggregated_data"].append(data)
-                            aggregated["total_items"] += 1
-                    elif merge_strategy == "concatenate_objects":
-                        file_data = {
-                            "source": source_info,
-                            "data": data
-                        }
-                        aggregated["aggregated_data"].append(file_data)
-                        aggregated["total_items"] += 1
-                        
-            except Exception as e:
-                logger.error(f"Error processing file {file_path}: {e}")
-                continue
-        
-        return aggregated
-    
     def _aggregate_text_files(self, file_paths: List[str], include_metadata: bool) -> str:
         """Aggregate text files by concatenating content."""
         aggregated_content = []
         
         if include_metadata:
-            aggregated_content.append(f"# Aggregated Dataset")
+            aggregated_content.append("# Aggregated Dataset")
             aggregated_content.append(f"# Generated on: {time.strftime('%Y-%m-%d %H:%M:%S')}")
             aggregated_content.append(f"# Source files: {len(file_paths)}")
             aggregated_content.append("")
