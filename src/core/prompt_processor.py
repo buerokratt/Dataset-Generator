@@ -59,16 +59,16 @@ class PromptProcessor:
         try:
             template_obj = Template(template)
             processed = template_obj.safe_substitute(params)
-            
+
             # Check for unresolved variables
-            unresolved_vars = re.findall(r'\$\{([^}]+)\}', processed)
+            unresolved_vars = re.findall(r"\$\{([^}]+)\}", processed)
             if unresolved_vars:
                 logger.warning(f"Unresolved template variables: {unresolved_vars}")
                 logger.debug(f"Available parameters: {list(params.keys())}")
-                
+
                 # Optionally, you could use substitute() instead to raise KeyError
                 # processed = template_obj.substitute(params)
-                
+
             return processed
         except Exception as e:
             logger.error(f"Error processing template: {e}")

@@ -3,7 +3,7 @@
 
 # General settings
 general:
-  output_dir: "evaluation_results"
+  output_dir: "u"
   stopwords_file: "data/estonian-stopwords.txt"
 
 # File structure configuration

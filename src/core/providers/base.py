@@ -1,8 +1,9 @@
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from typing import Dict, Any, Optional
+from dspy import dspy
 
 
-class ModelProvider(ABC):
+class ModelProvider(dspy.LM):
     """
     Abstract base class defining the interface for all model providers.
 
@@ -35,7 +36,7 @@ class ModelProvider(ABC):
     """
 
     @abstractmethod
-    def generate(self, prompt: str, options: Optional[Dict[str, Any]] = None) -> str:
+    def predict(self, prompt: str, options: Optional[Dict[str, Any]] = None) -> str:
         """Generate text from a prompt"""
         pass
 

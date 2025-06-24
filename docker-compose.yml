@@ -22,7 +22,8 @@ services:
               capabilities: [gpu, utility, compute]
     volumes:
       - ollama_models:/root/.ollama
-      - ./scripts:/scripts
+      - ./scripts/ollama-entrypoint.sh:/ollama-entrypoint.sh
+    entrypoint: ["bash", "/ollama-entrypoint.sh"]
     restart: unless-stopped
     networks:
       - dataset_gen_net

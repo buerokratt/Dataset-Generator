@@ -1,6 +1,8 @@
+# data_generator.py
 from typing import Dict, Any, Optional, List
 import os
 import json
+import re
 import time
 from pathlib import Path
 
@@ -10,79 +12,100 @@ from src.core.prompt_processor import PromptProcessor
 from src.core.storage_manager import StorageManager
 from src.utils.logger import logger, setup_logger
 
+from src.core.dspy_generation import PromptPipeline, optimize_prompt_with_dspy
+
+from src.core.metrics import (
+    InformationCoverageMetric,
+    PerSampleQualityEvaluator,
+    RelevanceCoverageMetric,
+)
+
 setup_logger("synthetic-data-service", "INFO")
 
 
 class DataGenerator:
     """
-    Core component for generating synthetic datasets using configurable templates and LLM providers.
+    A class to generate synthetic datasets using language models (LLMs) and DSPy prompt optimization.
 
-    This class orchestrates the entire dataset generation pipeline, from loading dataset structure
-    definitions and prompt templates to generating content via LLM providers and saving the output
-    in the specified structure.
+    This generator loads a specified prompt template, fills it with context parameters,
+    invokes the model to produce structured data, and evaluates the output using various
+    metrics (information coverage, relevance, and per-sample quality). It also optionally
+    optimizes prompts using DSPy if the output quality is below threshold.
 
     Attributes:
-        config (Dict[str, Any]): Configuration dictionary for the generator
-        model_provider (ModelProvider): Provider for LLM access
-        model_client (ModelProvider): Client for interacting with the LLM
-        template_registry (TemplateRegistry): Registry for dataset structures and prompt templates
-        prompt_processor (PromptProcessor): Processor for template variable substitution
-        storage_manager (StorageManager): Manager for file operations
-        generation_defaults (Dict[str, Any]): Default generation parameters
-        output_dir (str): Directory for generated datasets
-        templates_dir (str): Directory for template files
-        user_configs_dir (str): Directory for user configuration files
-        data_dir (str): Directory for input data files
-
-    Example:
-        ```python
-        # Initialize with configuration
-        config = {"provider": {"name": "ollama", "model": "gemma3:1b-it-qat"}}
-        generator = DataGenerator(config)
-
-        # Generate a dataset
-        output_path = generator.generate(
-            structure_name="estonian_qa",
-            prompt_template_name="qa_generator",
-            num_examples=10,
-            parameters={"language": "et", "topic": "finance"}
-        )
-        ```
+        config (dict): Configuration dictionary for model, directories, and generation behavior.
+        model_provider: The LLM backend instance (e.g., Ollama, OpenAI).
+        template_registry: Manages prompt templates and structure definitions.
+        prompt_processor: Replaces placeholders in templates with actual values.
+        storage_manager: Manages file storage interactions.
     """
-
     def __init__(self, config=None):
-        """Initialize with configuration"""
+        """
+        Initializes the DataGenerator with optional configuration.
+
+        Args:
+            config (dict, optional): Configuration settings including provider, directories, and generation defaults.
+        """
         self.config = config or {}
-
-        # Initialize provider
-        provider_config = self.config.get("provider", {})
-        self.model_provider = get_provider(provider_config)
-
-        # Create model client from provider
-        self.model_client = self.model_provider if self.model_provider else None
-
-        # Initialize template registry
+        self.model_provider = get_provider(self.config.get("provider", {}))
         self.template_registry = TemplateRegistry(self.config)
-
-        # Initialize prompt processor
         self.prompt_processor = PromptProcessor()
-
-        # Initialize storage manager
         self.storage_manager = StorageManager()
-
-        # Get generation defaults
         self.generation_defaults = self.config.get("generation", {})
+        self.evaluation_models_defaults = self.config.get("models", {})
+        self.embedding_model = self.evaluation_models_defaults.get("embedding_model")
 
-        # Get directories config
         directories = self.config.get("directories", {})
         self.output_dir = directories.get("output", "output_datasets")
         self.templates_dir = directories.get("templates", "templates")
         self.user_configs_dir = directories.get("user_configs", "user_configs")
         self.data_dir = directories.get("input", "data")
+        self.info_metric = None
+        self.relevance_metric = None
+        self.per_sample_evaluator = None
 
-        # Create necessary directories
         for dir_path in [self.output_dir, self.templates_dir, self.user_configs_dir]:
             os.makedirs(dir_path, exist_ok=True)
+
+    def get_info_metric(self):
+        """
+        Lazily initializes and returns the InformationCoverageMetric instance.
+
+        Returns:
+            InformationCoverageMetric: Metric to evaluate semantic content completeness.
+        """
+        
+        if self.info_metric is None:
+            self.info_metric = InformationCoverageMetric(
+                embedding_model=self.embedding_model
+            )
+        return self.info_metric
+
+    def get_relevance_metric(self):
+        """
+        Lazily initializes and returns the RelevanceCoverageMetric instance.
+
+        Returns:
+            RelevanceCoverageMetric: Metric to evaluate how relevant the generated output is to the prompt.
+        """
+        if self.relevance_metric is None:
+            self.relevance_metric = RelevanceCoverageMetric(
+                embedding_model=self.embedding_model
+            )
+        return self.relevance_metric
+
+    def get_per_sample_evaluator(self):
+        """
+        Lazily initializes and returns the PerSampleQualityEvaluator instance.
+
+        Returns:
+            PerSampleQualityEvaluator: Evaluates each generated sample for structure and quality.
+        """
+        if self.per_sample_evaluator is None:
+            self.per_sample_evaluator = PerSampleQualityEvaluator(
+                embedding_model=self.embedding_model
+            )
+        return self.per_sample_evaluator
 
     def generate(
         self,
@@ -93,318 +116,216 @@ class DataGenerator:
         num_examples: Optional[int] = None,
         output_format: str = "json",
         parameters: Dict[str, Any] = None,
+        optimize_prompts: bool = False,
     ) -> str:
         """
-        Generate a dataset
+        Entry point for generating a synthetic dataset based on a structure and template.
 
         Args:
-            structure_name: Name of the dataset structure
-            prompt_template_name: Name of the prompt template
-            dataset_name: Name for the dataset (used if output_base_path not provided)
-            output_base_path: Path where to save the dataset
-            num_examples: Number of examples to generate (defaults to config)
-            output_format: Format for output files
-            parameters: Additional parameters for generation
+            structure_name (str): Name of the registered data structure to use.
+            prompt_template_name (str): Filename of the prompt template to use.
+            dataset_name (str, optional): Output folder name. If not provided, timestamp will be used.
+            output_base_path (str, optional): Full output path to use instead of computed name.
+            num_examples (int, optional): Number of examples to generate per file.
+            output_format (str): File format, defaults to "json".
+            parameters (dict): Runtime variables for prompt substitution.
+            optimize_prompts (bool): Whether to apply DSPy prompt optimization if output is subpar.
 
         Returns:
-            Path to the generated dataset
+            str: Path to the generated dataset directory.
         """
         parameters = parameters or {}
-        if "language" in parameters:
-            if (
-                not isinstance(parameters["language"], str)
-                or len(parameters["language"]) > 10
-            ):
-                logger.warning("Invalid language parameter detected, using default")
-                parameters["language"] = "et"
-
-        if output_base_path and ".." in output_base_path:
-            logger.warning(
-                f"Path traversal attempt detected in output_base_path: {output_base_path}"
-            )
-            output_base_path = output_base_path.replace("..", "")
 
         num_examples = num_examples or self.generation_defaults.get(
             "default_num_examples", 5
         )
 
-        # Determine output directory
         if output_base_path:
             output_dir = Path(output_base_path)
-            effective_dataset_name = os.path.basename(output_base_path)
         elif dataset_name:
             output_dir = Path(self.output_dir) / dataset_name
-            effective_dataset_name = dataset_name
         else:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
-            effective_dataset_name = f"{structure_name}_{timestamp}"
-            output_dir = Path(self.output_dir) / effective_dataset_name
+            output_dir = Path(self.output_dir) / f"{structure_name}_{timestamp}"
 
-        logger.info(f"Generating dataset '{effective_dataset_name}' at '{output_dir}'")
+        structure = self.template_registry.get_structure(structure_name)["root"]
+        template_path = self.template_registry.get_template_path(prompt_template_name)
+        with open(template_path, "r", encoding="utf-8") as f:
+            prompt_template = f.read()
 
-        # Load structure and template
-        try:
-            structure = self.template_registry.get_structure(structure_name)
-            structure_root = structure.get("root", {})
-        except KeyError as e:
-            logger.error(f"Failed to load structure: {e}")
-            raise ValueError(f"Dataset structure '{structure_name}' not found")
-
-        try:
-            template_path = self.template_registry.get_template_path(
-                prompt_template_name
+        if optimize_prompts:
+            prompt_template = optimize_prompt_with_dspy(
+                prompt_template, self.model_provider
             )
-            with open(template_path, "r", encoding="utf-8") as f:
-                prompt_template = f.read()
-        except (KeyError, FileNotFoundError) as e:
-            logger.error(f"Failed to load prompt template: {e}")
-            raise ValueError(f"Prompt template '{prompt_template_name}' not found")
 
-        # Create output directory
         os.makedirs(output_dir, exist_ok=True)
-
-        # Save metadata
-        metadata = {
-            "name": effective_dataset_name,
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "structure_name": structure_name,
-            "prompt_template_name": prompt_template_name,
-            "num_examples_requested": num_examples,
-            "output_format": output_format,
-            "parameters": parameters,
-            "output_path": str(output_dir.resolve()),
-        }
-
-        metadata_path = output_dir / "metadata.json"
-        with open(metadata_path, "w") as f:
-            json.dump(metadata, f, indent=2)
-
-        # Generate data
-        self._generate_data(
-            output_dir=str(output_dir),
-            structure_root=structure_root,
-            prompt_template=prompt_template,
-            num_examples=num_examples,
-            output_format=output_format,
-            parameters=parameters,
+        self._generate_data_with_dspy(
+            str(output_dir),
+            structure,
+            prompt_template,
+            num_examples,
+            output_format,
+            parameters,
         )
-
-        logger.info(f"Dataset generation completed: {output_dir}")
         return str(output_dir)
 
-    def _generate_data(
+    def _generate_data_with_dspy(
         self,
         output_dir: str,
-        structure_root: Dict[str, Any],  # Expecting the 'root' node
+        structure_root: dict,
         prompt_template: str,
-        num_examples: int,  # Total examples requested for the whole call
-        output_format: str,  # The final output format (e.g., 'json')
-        parameters: Dict[str, Any],
-    ) -> None:
-        """Generate data for files defined in the structure_root."""
-        base_output_path = Path(output_dir.replace("\\", "/"))
+        num_examples: int,
+        output_format: str,
+        parameters: dict,
+    ):
+        """
+        Internal method to drive the actual generation logic using LLMs and evaluate results.
 
-        # Flatten the structure to get defined files relative to the root
+        Args:
+            output_dir (str): Directory where outputs are saved.
+            structure_root (dict): Structure dictionary describing subdirectories and files.
+            prompt_template (str): Template text with placeholders for generation.
+            num_examples (int): Number of samples to generate for each file.
+            output_format (str): Output format (e.g., json, txt).
+            parameters (dict): Contextual values to fill the prompt.
+        """
+        pipeline = PromptPipeline(self.model_provider)
+        info_metric = self.get_info_metric()
+        relevance_metric = self.get_relevance_metric()
+        per_sample_evaluator = self.get_per_sample_evaluator()
+
         for relative_file_key, file_info in self._flatten_structure(structure_root):
-            # file_info contains format specified in YAML, etc.
-            # Use the output_format passed to the function as the definitive format
-            file_format = output_format  # Override YAML format if needed, or use file_info['format']
-            file_extension = f".{file_format}"
-
-            # Construct the full path for the output file with forward slashes
-            # relative_file_key is like 'faqs' from the YAML
-            output_file_path = base_output_path / f"{relative_file_key}{file_extension}"
-
-            # Log the file path being written to
-            logger.info(f"Writing to file: {output_file_path}")
-
-            # Ensure the directory for this file exists (important for nested structures if any)
-            os.makedirs(output_file_path.parent, exist_ok=True)
-
-            # Determine number of examples for *this specific file*
-            # Use the relative_file_key for parameter lookup
-            path_examples = self._get_path_examples(
+            file_format = file_info.get("format", output_format)
+            output_path = Path(output_dir) / f"{relative_file_key}.{file_format}"
+            os.makedirs(output_path.parent, exist_ok=True)
+            examples_count = self._get_path_examples(
                 relative_file_key, num_examples, parameters
             )
-            logger.info(
-                f"Generating {path_examples} examples for file: {output_file_path}"
-            )
 
-            generated_items = []
-            for i in range(path_examples):
-                if self.config:
-                    default_language = getattr(self.config, "DEFAULT_LANGUAGE", "et")
-                    supported_languages = getattr(
-                        self.config,
-                        "SUPPORTED_LANGUAGES",
-                        {"en": "English", "et": "Estonian", "fi": "Finnish"},
+            regenerate = True
+            attempts = 0
+            best_items = []
+
+            while regenerate and attempts < 3:
+                attempts += 1
+                items = []
+                high_quality_samples = []
+
+                for i in range(examples_count):
+                    context = dict(parameters)
+                    context["index"] = i + 1
+                    processed = self.prompt_processor.process(prompt_template, context)
+                    output = pipeline.generate_raw_output(
+                        requirements=processed, context="{}"
                     )
-                    default_system_prompt = getattr(
-                        self.config,
-                        "DEFAULT_SYSTEM_PROMPT",
-                        "You are a helpful assistant providing accurate information based on topic content.",
+                    parsed_items = self.extract_json_from_llm_output([output])
+
+                    for item in parsed_items:
+                        score = per_sample_evaluator(item, context)
+                        if score >= 0.2:
+                            high_quality_samples.append(item)
+
+                    items.extend(parsed_items)
+
+                batch_text = " ".join(
+                    json.dumps(item, ensure_ascii=False) for item in items
+                )
+                info_score, _ = info_metric(batch_text, [prompt_template])
+                relevance_score, _ = relevance_metric(batch_text, [prompt_template])
+                avg = (info_score + relevance_score) / 2
+                logger.info(
+                    f"[{relative_file_key}] Attempt {attempts}: Info={info_score:.3f}, Relevance={relevance_score:.3f}, Avg={avg:.3f}"
+                )
+
+                if avg >= 0.4:
+                    regenerate = False
+                    best_items = items
+                elif attempts == 2 and high_quality_samples:
+                    # Optional: Use good samples for prompt tuning here before final retry
+                    logger.info(
+                        f"[{relative_file_key}] Avg Score ({avg:.2f}) still below threshold. Found {len(high_quality_samples)} good samples. Applying DSPy prompt optimization."
                     )
-                else:
-                    default_language = "et"
-                    supported_languages = {
-                        "en": "English",
-                        "et": "Estonian",
-                        "fi": "Finnish",
-                    }
-                    default_system_prompt = "You are a helpful assistant providing accurate information based on topic content."
-                current_language_code = parameters.get("language", default_language)
-                language_name = supported_languages.get(
-                    current_language_code, current_language_code
-                )
-                current_system_prompt = parameters.get(
-                    "system_prompt", default_system_prompt
-                )
-                prompt_params = {
-                    "index": i,
-                    "path": relative_file_key,
-                    "format": file_format,
-                    "language_name": language_name,
-                    "language_code": current_language_code,
-                    "system_prompt": current_system_prompt,
-                    **parameters,
-                }
+                    context = dict(parameters)
+                    proceesed_prompt_templete_to_optimmize = (
+                        self.prompt_processor.process(prompt_template, context)
+                    )
+                    prompt_template = optimize_prompt_with_dspy(
+                        proceesed_prompt_templete_to_optimmize, self.model_provider
+                    )
 
-                logger.debug(
-                    f"Using language: {language_name} ({current_language_code})"
-                )
-                logger.debug(f"Prompt params: {prompt_params}")
-                prompt = self.prompt_processor.process(prompt_template, prompt_params)
-                content = self.model_client.generate(prompt)
-
-                # Process content (especially for JSON aggregation)
+            with open(output_path, "w", encoding="utf-8") as f:
                 if file_format == "json":
-                    try:
-                        parsed = json.loads(content)
-                        if isinstance(
-                            parsed, list
-                        ):  # If model returns a list for one call
-                            generated_items.extend(parsed)
-                        else:  # Assume model returns one item per call
-                            generated_items.append(parsed)
-                    except json.JSONDecodeError:
-                        logger.warning(
-                            f"Non-JSON response for item {i}: {content[:100]}..."
-                        )
-                        # Optionally try to extract or add raw content
-                        extracted = self.prompt_processor.extract_json(content)
-                        if extracted:
-                            try:
-                                parsed = json.loads(extracted)
-                                if isinstance(parsed, list):
-                                    generated_items.extend(parsed)
-                                else:
-                                    generated_items.append(parsed)
-                            except json.JSONDecodeError:
-                                logger.warning(
-                                    f"Extracted content still not JSON: {extracted[:100]}..."
-                                )
-                        else:
-                            continue
-
-                else:  # For text or other formats, append raw content
-                    generated_items.append(content)
-
-            # Save all generated items to the single file
-            logger.info(f"Writing {len(generated_items)} items to {output_file_path}")
-
-            try:
-                with open(output_file_path, "w", encoding="utf-8") as f:
-                    if file_format == "json":
-                        json.dump(generated_items, f, indent=2, ensure_ascii=False)
-                    else:  # Assume text, join with newlines
-                        f.write("\n".join(generated_items))
-
-                # Verify the file exists after writing
-                if os.path.exists(output_file_path):
-                    logger.info(f"Successfully wrote file: {output_file_path}")
+                    json.dump(best_items, f, indent=2, ensure_ascii=False)
                 else:
-                    logger.error(f"Failed to create file: {output_file_path}")
-            except Exception as e:
-                logger.error(f"Error writing to {output_file_path}: {e}")
+                    for x in best_items:
+                        f.write(str(x) + "\n")
 
     def _flatten_structure(
         self, structure_node: Dict[str, Any], current_path: str = ""
     ) -> List[tuple]:
         """
-        Flatten a hierarchical structure definition into a list of file paths with their metadata.
-
-        This method recursively traverses the nested directory structure defined in the dataset
-        structure YAML, converting it to a flat list of files that need to be generated. It handles
-        both files at the current level and files within subdirectories.
+        Recursively flattens a nested directory structure into a list of file paths and metadata.
 
         Args:
-            structure_node (Dict[str, Any]): The current node in the structure tree, containing
-                'files' and 'subdirectories' keys
-            current_path (str, optional): The relative path to the current node. Defaults to ""
+            structure_node (dict): The nested structure definition.
+            current_path (str): Current path in recursion.
 
         Returns:
-            List[tuple]: A list of tuples, each containing:
-                - relative_file_key (str): The path to the file relative to the output directory
-                - file_info (Dict): File metadata from the structure definition
-
-        Example:
-            For a structure like:
-            ```
-            root:
-            files:
-                faqs: {}
-            subdirectories:
-                examples:
-                files:
-                    sample1: {}
-            ```
-
-            Returns:
-            [('faqs', {}), ('examples/sample1', {})]
+            List[tuple]: List of (relative_file_path, file_info) pairs.
         """
         items = []
-        if ".." in current_path:
-            logger.warning(f"Path traversal attempt detected in: {current_path}")
-            current_path = current_path.replace("..", "")
         base_path = Path(current_path)
-        # Files at current level
-        if "files" in structure_node and structure_node["files"]:
-            for file_key, file_info in structure_node["files"].items():
-                # The key itself (e.g., 'faqs') is the identifier relative to current path
-                items.append((str(base_path / file_key), file_info))
-        # Recurse into subdirectories
-        if "subdirectories" in structure_node and structure_node["subdirectories"]:
-            for dir_key, dir_content in structure_node["subdirectories"].items():
-                items.extend(
-                    self._flatten_structure(dir_content, str(base_path / dir_key))
-                )
+        for k, v in structure_node.get("files", {}).items():
+            items.append((str(base_path / k), v))
+        for d, sd in structure_node.get("subdirectories", {}).items():
+            items.extend(self._flatten_structure(sd, str(base_path / d)))
         return items
 
     def _get_path_examples(
         self, relative_file_key: str, total_examples: int, parameters: Dict[str, Any]
     ) -> int:
         """
-        Determine how many examples to generate for a specific file path.
-
-        This method allows for file-specific control over the number of examples to generate.
-        It checks if a specific count parameter exists for this file (by normalizing the path
-        and looking for a corresponding parameter), and if found, uses that value instead of
-        the global total_examples value.
+        Gets the number of examples to generate for a specific file, allowing per-file overrides.
 
         Args:
-            relative_file_key (str): The relative path to the file (e.g., 'examples/sample1')
-            total_examples (int): The default number of examples to generate if no specific count found
-            parameters (Dict[str, Any]): Generation parameters that may contain file-specific counts
+            relative_file_key (str): Normalized path key for the file.
+            total_examples (int): Default number of examples.
+            parameters (dict): Parameters that might contain file-specific counts.
 
         Returns:
-            int: Number of examples to generate for this specific file
-
+            int: Number of examples to generate.
         """
-        normalized_key = relative_file_key.replace(os.sep, "_")
-        count_param = f"{normalized_key}_count"
-        if count_param in parameters:
+        normalized = relative_file_key.replace(os.sep, "_")
+        key = f"{normalized}_count"
+        return int(parameters.get(key, total_examples))
+
+    def extract_json_from_llm_output(self, llm_output):
+        """
+        Attempts to parse JSON-structured output from LLM responses.
+
+        Args:
+            llm_output (list): List of raw string outputs from the model.
+
+        Returns:
+            list: Parsed JSON objects (dicts or lists) extracted from model output.
+        """
+        all_questions = []
+        for item in llm_output:
+            cleaned = re.sub(r"```json|```", "", item, flags=re.IGNORECASE).strip()
             try:
-                return int(parameters[count_param])
-            except (ValueError, TypeError):
-                logger.warning(f"Invalid count for {count_param}")
-        return total_examples
+                if cleaned.startswith("[") or cleaned.startswith("{"):
+                    parsed = json.loads(cleaned)
+                else:
+                    match = re.search(r"\[.*\]", cleaned, re.DOTALL)
+                    if match:
+                        parsed = json.loads(match.group(0))
+                    else:
+                        continue
+                if isinstance(parsed, list):
+                    all_questions.extend(parsed)
+                elif isinstance(parsed, dict):
+                    all_questions.append(parsed)
+            except Exception as e:
+                print(f"Failed to parse item: {e}\nContent: {cleaned[:100]}...")
+                continue
+        return all_questions
