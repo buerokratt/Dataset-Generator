@@ -38,7 +38,7 @@ services:
       - "8000:8000"
     environment:
       - PROVIDER_NAME=ollama
-      - MODEL_NAME=gemma3:1b-it-qat
+      - MODEL_NAME=gemma3:12b
       - PROVIDER_API_URL=http://ollama:11434
       - SERVICE_DEBUG=false
       - MLFLOW_TRACKING_URI=http://mlflow:5000

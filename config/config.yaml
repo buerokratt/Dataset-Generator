@@ -1,7 +1,7 @@
 # LLM Provider configuration
 provider:
   name: "ollama"
-  model_name: "gemma3:1b-it-qat"
+  model_name: "gemma3:12b"
   api_url: "http://ollama:11434"
   timeout: 60
   max_retries: 3
@@ -21,7 +21,7 @@ directories:
   
 # Default generation settings (can be overridden per generation request)
 generation:
-  default_num_examples: 5
+  default_num_examples: 10
   default_language: "et"
   max_retries: 3
   parameters:
@@ -34,7 +34,7 @@ dataset_generation:
   prompt_template_name: "institute_topic_question"
   traversal_strategy: "recursive"
   output_format: "json"
-  num_samples: 5
+  num_samples: 10
   post_processing: "aggregation"  # Options: "zip", "aggregation"
   # Aggregation-specific configuration (only used when post_processing = "aggregation")
   aggregation:
@@ -42,12 +42,15 @@ dataset_generation:
     merge_strategy: "combine_arrays"
     include_metadata: true
 
-    # Default field mapping configuration
     field_mapping:
-      enabled: false  # Disabled by default for backward compatibility
-      payload_to_output: {}  # Empty by default - external projects will override
-      defaults: {}  # Empty by default - external projects will override  
-      content_fields: []
+      enabled: true
+      payload_to_output:
+        agency_name: agency_name
+        agency_id: agency_id
+      defaults:
+        id: auto_increment
+      content_fields:
+        - question
 
   parameters:
     language: "et"

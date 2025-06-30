@@ -1,5 +1,5 @@
 # Ollama Client and Model Settings
-model_name: "gemma3:1b-it-qat"
+model_name: "gemma3:12b"
 ollama_host: "http://ollama:11434"
 ollama_timeout: 60
 ollama_max_retries: 3
