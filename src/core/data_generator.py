@@ -193,6 +193,7 @@ class DataGenerator:
         info_metric = self.get_info_metric()
         relevance_metric = self.get_relevance_metric()
         per_sample_evaluator = self.get_per_sample_evaluator()
+        max_retries = self.config.get("generation", {}).get("max_retries", 3)
 
         for relative_file_key, file_info in self._flatten_structure(structure_root):
             file_format = file_info.get("format", output_format)
@@ -206,7 +207,7 @@ class DataGenerator:
             attempts = 0
             best_items = []
 
-            while regenerate and attempts < 3:
+            while regenerate and attempts < max_retries:
                 attempts += 1
                 items = []
                 high_quality_samples = []
@@ -240,18 +241,17 @@ class DataGenerator:
                 if avg >= 0.4:
                     regenerate = False
                     best_items = items
-                elif attempts == 2 and high_quality_samples:
-                    # Optional: Use good samples for prompt tuning here before final retry
+                elif attempts == max_retries - 1 and high_quality_samples:
                     logger.info(
                         f"[{relative_file_key}] Avg Score ({avg:.2f}) still below threshold. Found {len(high_quality_samples)} good samples. Applying DSPy prompt optimization."
                     )
                     context = dict(parameters)
-                    proceesed_prompt_templete_to_optimmize = (
-                        self.prompt_processor.process(prompt_template, context)
-                    )
-                    prompt_template = optimize_prompt_with_dspy(
-                        proceesed_prompt_templete_to_optimmize, self.model_provider
-                    )
+                    processed_prompt_template_to_optimize = self.prompt_processor.process(prompt_template, context)
+                    prompt_template = optimize_prompt_with_dspy(processed_prompt_template_to_optimize, self.model_provider)
+                elif attempts == max_retries:
+                    logger.warning(f"[{relative_file_key}] Final attempt reached. Accepting last generated samples with avg score {avg:.2f}.")
+                    best_items = items
+                    regenerate = False
 
             with open(output_path, "w", encoding="utf-8") as f:
                 if file_format == "json":

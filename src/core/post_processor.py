@@ -3,8 +3,11 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
 import os
-from src.utils.logger import logger
+from src.utils.logger import logger, setup_logger
 import time
+import random
+
+setup_logger("synthetic-data-service", "INFO")
 
 
 class PostProcessor(ABC):
@@ -87,7 +90,7 @@ class AggregationPostProcessor(PostProcessor):
         dataset_metadata: List[dict] = None,
     ) -> Dict[str, Any]:
         """Aggregate JSON files with dynamic field mapping."""
-        aggregated = {"aggregated_data": [], "source_files": [], "total_items": 0}
+        aggregated = {"aggregated_data": [], "total_items": 0}
 
         if include_metadata:
             aggregated["metadata"] = {
@@ -96,7 +99,8 @@ class AggregationPostProcessor(PostProcessor):
                 "source_count": len(file_paths),
             }
 
-        # Auto-increment counter for IDs
+        # Collect all items first
+        all_items = []
         id_counter = 1
 
         for i, file_path in enumerate(file_paths):
@@ -108,7 +112,6 @@ class AggregationPostProcessor(PostProcessor):
                 dataset_dir = Path(file_path)
                 json_files = list(dataset_dir.glob("*.json"))
 
-                # Get corresponding dataset metadata
                 current_dataset_metadata = (
                     dataset_metadata[i]
                     if dataset_metadata and i < len(dataset_metadata)
@@ -122,21 +125,32 @@ class AggregationPostProcessor(PostProcessor):
                     with open(json_file, "r", encoding="utf-8") as f:
                         data = json.load(f)
 
-                    # Process each item in the data
                     items_to_add = data if isinstance(data, list) else [data]
 
                     for item in items_to_add:
-                        # Apply field mapping
                         mapped_item = self._apply_field_mapping(
                             item, current_dataset_metadata, id_counter
                         )
-                        aggregated["aggregated_data"].append(mapped_item)
+                        all_items.append(mapped_item)
                         id_counter += 1
-                        aggregated["total_items"] += 1
 
             except Exception as e:
                 logger.error(f"Error processing file {file_path}: {e}")
                 continue
+
+        # Shuffle all items and replace id with sequential values
+        if all_items:
+            logger.info(f"Shuffling {len(all_items)} items")
+            random.shuffle(all_items)
+            
+            # Replace id with sequential values after shuffling
+            aggregated["aggregated_data"] = [
+                {**item, "id": str(idx + 1)} 
+                for idx, item in enumerate(all_items)
+            ]
+            aggregated["total_items"] = len(all_items)
+            
+            logger.info("Added sequential id values after shuffling")
 
         return aggregated
 

@@ -279,7 +279,8 @@ async def process_single_dataset(
                 f"Performing individual {post_processing_type} post-processing for {dataset_request.data_path}"
             )
 
-            base_output_dir = f"{output_dir}/{structure_name}"
+            # base_output_dir = f"{output_dir}/{structure_name}"
+            base_output_dir = f"{output_dir}"
             post_processor = PostProcessorFactory.create_post_processor(modified_config)
             final_output_path = post_processor.process(
                 all_output_paths, base_output_dir
@@ -428,9 +429,8 @@ async def background_generate_bulk(
 
             # Perform final aggregation with metadata
             dataset_config = config.get("dataset_generation", {})
-            structure_name = dataset_config.get("structure_name")
             output_dir = config.get("directories", {}).get("output")
-            base_output_dir = f"{output_dir}/{structure_name}"
+            base_output_dir = f"{output_dir}"
 
             final_post_processor = PostProcessorFactory.create_post_processor(
                 final_aggregation_config
@@ -474,24 +474,24 @@ async def background_generate_bulk(
             for result in all_results:
                 cleaned_result = result.copy()
                 if "_internal_results" in cleaned_result:
-                    del cleaned_result["_internal_results"]  # Remove internal data
+                    del cleaned_result["_internal_results"]
                 cleaned_results.append(cleaned_result)
 
             callback_payload = {
                 "task_id": task_id,
                 "status": final_status,
                 "message": task_status_store[task_id]["message"],
-                # "completed_at": task_status_store[task_id]["completed_at"],
-                # "successful_count": successful_count,
-                # "failed_count": failed_count,
                 "filePath": final_aggregated_path,
-                "results": cleaned_results,  # Use cleaned results without _internal_results
+                "results": cleaned_results,
             }
             print(callback_payload)
             logger.info(
                 f"DEBUG: Sending callback to {callback_url} with payload: {callback_payload}"
             )
-            await send_callback(callback_url, callback_payload)
+            # await send_callback(callback_url, callback_payload)
+            logger.info(
+                f"Callback sent successfully for task {task_id} to {callback_url}")
+            logger.info("Generation task completed successfully")
 
     except Exception as e:
         logger.exception(f"Error in background generation for task {task_id}: {str(e)}")

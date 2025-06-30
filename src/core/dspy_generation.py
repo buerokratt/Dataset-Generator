@@ -1,7 +1,12 @@
 import json
 import dspy
-from loguru import logger
 from typing import Any
+from src.utils.logger import logger, setup_logger
+
+setup_logger("synthetic-data-service", "INFO")
+
+
+
 
 """
 dspy_generation.py
