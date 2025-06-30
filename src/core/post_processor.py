@@ -3,9 +3,11 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
 import os
-from src.utils.logger import logger
+from src.utils.logger import logger, setup_logger
 import time
 import random
+
+setup_logger("synthetic-data-service", "INFO")
 
 
 class PostProcessor(ABC):

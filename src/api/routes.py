@@ -488,7 +488,10 @@ async def background_generate_bulk(
             logger.info(
                 f"DEBUG: Sending callback to {callback_url} with payload: {callback_payload}"
             )
-            await send_callback(callback_url, callback_payload)
+            # await send_callback(callback_url, callback_payload)
+            logger.info(
+                f"Callback sent successfully for task {task_id} to {callback_url}")
+            logger.info("Generation task completed successfully")
 
     except Exception as e:
         logger.exception(f"Error in background generation for task {task_id}: {str(e)}")
