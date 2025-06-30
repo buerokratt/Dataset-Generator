@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from src.core.providers.base import ModelProvider
-from src.core.providers.ollama import OllamaProvider
+from src.core.providers.ollama import OllamaLM
 from src.utils.logger import logger
 import os
 
@@ -43,7 +43,7 @@ def get_provider(config: Dict[str, Any] = None) -> ModelProvider:
     provider_name = config.get("name") or os.getenv("PROVIDER_NAME", "ollama")
 
     providers = {
-        "ollama": lambda cfg: OllamaProvider(cfg)
+        "ollama": lambda cfg: OllamaLM(cfg)
         # Add more providers here as needed
     }
 
