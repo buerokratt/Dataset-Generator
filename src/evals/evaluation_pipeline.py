@@ -192,9 +192,9 @@ class EvaluationPipeline:
                         )
 
                         if conversations:
-                            agency_topics_conversations[agency_name][
-                                topic_name
-                            ] = conversations
+                            agency_topics_conversations[agency_name][topic_name] = (
+                                conversations
+                            )
                 else:
                     # Assume topics are direct subdirectories
                     topic_dirs = [
@@ -210,9 +210,9 @@ class EvaluationPipeline:
                         )
 
                         if conversations:
-                            agency_topics_conversations[agency_name][
-                                topic
-                            ] = conversations
+                            agency_topics_conversations[agency_name][topic] = (
+                                conversations
+                            )
         else:
             # Assume direct agency directories
             agency_dirs = [
@@ -549,7 +549,6 @@ class EvaluationPipeline:
             or self.file_structure.get("check_json_fallback", True)
             or self.file_structure.get("prefer_json", False)
         ):
-
             # Check for conversations.json file specifically
             conversations_json = os.path.join(directory, "conversations.json")
             if os.path.exists(conversations_json):
@@ -715,9 +714,9 @@ class EvaluationPipeline:
 
                             topic_content = read_file(topic_file)
                             if topic_content.strip():
-                                agency_topic_documents[agency][
-                                    topic_name
-                                ] = topic_content
+                                agency_topic_documents[agency][topic_name] = (
+                                    topic_content
+                                )
                                 logger.info(
                                     f"Found topic document for {agency}/{topic_name}"
                                 )
@@ -744,9 +743,9 @@ class EvaluationPipeline:
                         topic_content = read_file(topic_file)
 
                         if topic_content.strip():
-                            agency_topic_documents[agency_name][
-                                topic_name
-                            ] = topic_content
+                            agency_topic_documents[agency_name][topic_name] = (
+                                topic_content
+                            )
         else:
             # Look for output_* directories as a fallback for backward compatibility
             output_dirs = [
@@ -847,9 +846,9 @@ class EvaluationPipeline:
                             # Assume second level keys are topics
                             for topic, topic_content in topics.items():
                                 if isinstance(topic_content, str):
-                                    agency_topic_documents[agency][
-                                        topic
-                                    ] = topic_content
+                                    agency_topic_documents[agency][topic] = (
+                                        topic_content
+                                    )
                                 elif (
                                     isinstance(topic_content, dict)
                                     and "content" in topic_content
@@ -864,16 +863,16 @@ class EvaluationPipeline:
 
                 for i, item in enumerate(content):
                     if isinstance(item, str):
-                        topic_name = f"topic_{i+1}"
+                        topic_name = f"topic_{i + 1}"
                         agency_topic_documents[default_agency][topic_name] = item
                     elif isinstance(item, dict):
-                        topic_name = item.get("topic", f"topic_{i+1}")
+                        topic_name = item.get("topic", f"topic_{i + 1}")
                         topic_content = item.get("content", "")
 
                         if topic_content:
-                            agency_topic_documents[default_agency][
-                                topic_name
-                            ] = topic_content
+                            agency_topic_documents[default_agency][topic_name] = (
+                                topic_content
+                            )
 
         except Exception as e:
             logger.error(f"Error reading JSON topic documents: {e}")
@@ -1287,7 +1286,7 @@ class EvaluationPipeline:
                 # Evaluate each conversation
                 conversation_results = []
                 for i, conversation in enumerate(conversations):
-                    conv_id = f"conversation_{i+1}"
+                    conv_id = f"conversation_{i + 1}"
                     conv_results = self.evaluate_conversation(
                         conversation, topic_doc, agency_name, topic_name
                     )
@@ -1313,9 +1312,9 @@ class EvaluationPipeline:
                 topic_results["overall"] = {**avg_results, **topic_level_results}
 
                 # Save topic results
-                self.results["by_agency"][agency_name]["by_topic"][
-                    topic_name
-                ] = topic_results
+                self.results["by_agency"][agency_name]["by_topic"][topic_name] = (
+                    topic_results
+                )
                 self.results["by_topic"][f"{agency_name}/{topic_name}"] = topic_results[
                     "overall"
                 ]

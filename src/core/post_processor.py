@@ -142,14 +142,13 @@ class AggregationPostProcessor(PostProcessor):
         if all_items:
             logger.info(f"Shuffling {len(all_items)} items")
             random.shuffle(all_items)
-            
+
             # Replace id with sequential values after shuffling
             aggregated["aggregated_data"] = [
-                {**item, "id": str(idx + 1)} 
-                for idx, item in enumerate(all_items)
+                {**item, "id": str(idx + 1)} for idx, item in enumerate(all_items)
             ]
             aggregated["total_items"] = len(all_items)
-            
+
             logger.info("Added sequential id values after shuffling")
 
         return aggregated

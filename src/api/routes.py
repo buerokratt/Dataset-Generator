@@ -428,7 +428,6 @@ async def background_generate_bulk(
             ] = common_output_filename
 
             # Perform final aggregation with metadata
-            dataset_config = config.get("dataset_generation", {})
             output_dir = config.get("directories", {}).get("output")
             base_output_dir = f"{output_dir}"
 
@@ -490,7 +489,8 @@ async def background_generate_bulk(
             )
             # await send_callback(callback_url, callback_payload)
             logger.info(
-                f"Callback sent successfully for task {task_id} to {callback_url}")
+                f"Callback sent successfully for task {task_id} to {callback_url}"
+            )
             logger.info("Generation task completed successfully")
 
     except Exception as e:
@@ -517,6 +517,7 @@ async def generate_bulk_dataset(
     Accepts a list of datasets with flexible metadata and returns immediately with a task_id.
     Supports callback notifications when processing is complete.
     """
+    logger.info("Received bulk dataset generation request")
     try:
         logger.info(
             f"Received bulk generation request for {len(request.datasets)} datasets"

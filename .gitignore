@@ -37,7 +37,7 @@ ENV/
 # Project specific
 logs/
 *.log
-output_datasets_new/
+output_datasets/
 datasets/
 
 # MLflow related

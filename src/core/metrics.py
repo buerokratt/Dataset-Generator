@@ -6,6 +6,7 @@ Includes metrics for semantic diversity, keyword coverage, information coverage,
 and relevance coverage. These are used to provide both single-sample and batch-level
 feedback for data generation and prompt optimization workflows.
 """
+
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
@@ -27,6 +28,7 @@ logger.add(sys.stdout, format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
 
 class SemanticDiversityMetric:
     """Measures the semantic diversity across generated outputs using TF-IDF cosine similarity."""
+
     def __call__(self, outputs: List[str]) -> float:
         """Compute semantic diversity score for a list of outputs.
 
@@ -53,6 +55,7 @@ class SemanticDiversityMetric:
 
 class KeywordCoverageMetric:
     """Calculates how well required keywords are covered in generated outputs."""
+
     def __init__(self, required_keywords: List[str]):
         self.required_keywords = [kw.lower() for kw in required_keywords]
 
@@ -79,6 +82,7 @@ class KeywordCoverageMetric:
 
 class InformationCoverageMetric:
     """Measures how much of the topic content is semantically covered in the conversation."""
+
     def __init__(self, embedding_model: str):
         self.model_name = embedding_model
         self.model = SentenceTransformer(self.model_name)
@@ -133,10 +137,13 @@ class InformationCoverageMetric:
 
 class RelevanceCoverageMetric:
     """Computes relevance score between conversation and topic documents based on segment, query, and term alignment."""
+
     def __init__(self, embedding_model: str):
         self.config = ConfigLoader.load()
         self.model = SentenceTransformer(embedding_model)
-        self.segment_weight = self.config.get("relevance_score", {}).get("segment_weight")
+        self.segment_weight = self.config.get("relevance_score", {}).get(
+            "segment_weight"
+        )
         self.query_weight = self.config.get("relevance_score", {}).get("query_weight")
         self.term_weight = self.config.get("relevance_score", {}).get("term_weight")
 
@@ -293,6 +300,7 @@ class RelevanceCoverageMetric:
 
 class PerSampleQualityEvaluator:
     """Evaluates a single sample using semantic similarity to the original context."""
+
     def __init__(self, embedding_model: str):
         self.semantic_metric = InformationCoverageMetric(embedding_model)
 
