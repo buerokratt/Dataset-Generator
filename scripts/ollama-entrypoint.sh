@@ -1,6 +1,6 @@
 #!/bin/bash
 
-MODEL_NAME=${MODEL_NAME:-"gemma3:12b"}
+MODEL_NAME=${MODEL_NAME:-"gemma3:1b-it-qat"}
 
 # Start Ollama in the background
 ollama serve &

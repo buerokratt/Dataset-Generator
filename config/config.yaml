@@ -1,7 +1,7 @@
 # LLM Provider configuration
 provider:
   name: "ollama"
-  model_name: "gemma3:12b"
+  model_name: "gemma3:1b-it-qat"
   api_url: "http://ollama:11434"
   timeout: 60
   max_retries: 3

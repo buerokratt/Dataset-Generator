@@ -7,7 +7,6 @@ pyyaml
 jinja2
 loguru==0.7.3
 httpx
-dspy
 scikit-learn
 numpy
 sentence-transformers
