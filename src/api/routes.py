@@ -4,12 +4,13 @@ import httpx
 from src.core.data_generator import DataGenerator
 from src.core.data_source import DataSourceManager
 from src.core.post_processor_factory import PostProcessorFactory
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from src.utils.logger import logger
 import time
 import uuid
 import asyncio
 import re
+import os
 
 router = APIRouter()
 
@@ -25,11 +26,15 @@ class DatasetRequest(BaseModel):
 
     data_path: str = Field(..., description="Path to the data source")
     output_filename: Optional[str] = Field(None, description="Custom output filename")
+    version_id: Optional[str] = Field(
+        "v1", description="Version identifier for the dataset"
+    )
 
     class Config:
         extra = "allow"  # Allow additional fields like agency_id, etc.
 
-    @validator("data_path")
+    @field_validator("data_path")
+    @classmethod
     def validate_data_path(cls, v):
         if not v or not v.strip():
             raise ValueError("data_path cannot be empty")
@@ -37,7 +42,8 @@ class DatasetRequest(BaseModel):
             raise ValueError("data_path contains invalid characters")
         return v.strip()
 
-    @validator("output_filename")
+    @field_validator("output_filename")
+    @classmethod
     def validate_output_filename(cls, v):
         if v is not None:
             if not v or not v.strip():
@@ -46,6 +52,16 @@ class DatasetRequest(BaseModel):
             if not re.match(r"^[a-zA-Z0-9_-]+$", v.strip()):
                 raise ValueError("output_filename contains invalid characters")
         return v.strip() if v else None
+
+    @field_validator("version_id")
+    @classmethod
+    def validate_version_id(cls, v):
+        if v is not None:
+            if not v or not v.strip():
+                raise ValueError("version_id cannot be empty if provided")
+            if not re.match(r"^[a-zA-Z0-9._-]+$", v.strip()):
+                raise ValueError("version_id contains invalid characters")
+        return v.strip() if v else "v1"
 
 
 class BulkGenerateRequest(BaseModel):
@@ -151,6 +167,7 @@ async def process_single_dataset(
         structure_name = dataset_config.get("structure_name")
         prompt_template_name = dataset_config.get("prompt_template_name")
         traversal_strategy = dataset_config.get("traversal_strategy")
+        data_source_config = config.get("data_sources", {}).get("default", {})
         num_examples = dataset_config.get("num_samples")
         output_format = dataset_config.get("output_format")
         parameters = dataset_config.get("parameters", {})
@@ -177,7 +194,7 @@ async def process_single_dataset(
         output_dir = config.get("directories", {}).get("output")
 
         # Create data source manager
-        source_manager = DataSourceManager()
+        source_manager = DataSourceManager(config=data_source_config)
 
         # Load all matching sources
         data_sources = source_manager.load_sources(
@@ -260,7 +277,7 @@ async def process_single_dataset(
 
             return {
                 "success": True,
-                "dataset_metadata": dataset_request.dict(),
+                "dataset_metadata": dataset_request.model_dump(),
                 "post_processing_type": post_processing_type,
                 "final_output_path": None,  # Will be set after cross-dataset aggregation
                 "_internal_results": results,  # Keep for internal aggregation logic (NOT exposed in callback)
@@ -384,11 +401,33 @@ async def background_generate_bulk(
                 # Collect individual output paths using _internal_results
                 if "_internal_results" in result:
                     for individual_result in result["_internal_results"]:
-                        all_cross_dataset_output_paths.append(
-                            individual_result["output_path"]
-                        )
-                        # Extract metadata from dataset_request (convert to dict to include extra fields)
-                        metadata = dataset_request.dict()
+                        # FIX: Get the actual JSON file path, not the directory path
+                        output_path = individual_result["output_path"]
+
+                        # Check if it's a directory and find the JSON file
+                        if os.path.isdir(output_path):
+                            # Look for faqs.json in the directory
+                            json_file_path = os.path.join(output_path, "faqs.json")
+                            if os.path.exists(json_file_path):
+                                all_cross_dataset_output_paths.append(json_file_path)
+                            else:
+                                # Fallback: search for any JSON file
+                                for root, dirs, files in os.walk(output_path):
+                                    for file in files:
+                                        if file.endswith(".json"):
+                                            json_file_path = os.path.join(root, file)
+                                            all_cross_dataset_output_paths.append(
+                                                json_file_path
+                                            )
+                                            break
+                        else:
+                            # It's already a file
+                            all_cross_dataset_output_paths.append(output_path)
+
+                        # Extract metadata from dataset_request
+                        metadata = (
+                            dataset_request.model_dump()
+                        )  # Use model_dump() for Pydantic v2
                         all_dataset_metadata.append(metadata)
             else:
                 failed_count += 1
@@ -487,9 +526,9 @@ async def background_generate_bulk(
             logger.info(
                 f"DEBUG: Sending callback to {callback_url} with payload: {callback_payload}"
             )
-            # await send_callback(callback_url, callback_payload)
+            await send_callback(callback_url, callback_payload)
             logger.info(
-                f"Callback sent successfully for task {task_id} to {callback_url}"
+                f"Callback sent successfully for task {task_id} with {callback_url}"
             )
             logger.info("Generation task completed successfully")
 
