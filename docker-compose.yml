@@ -51,22 +51,6 @@ services:
       - ./logs:/app/logs
     depends_on:
       - ollama
-      - mlflow
-    restart: unless-stopped
-    networks:
-      - dataset_gen_net
-
-  mlflow:
-    build:
-      context: ./mlflow
-      dockerfile: Dockerfile
-    image: synthesisai/dataset-generator-mlflow:latest
-    container_name: mlflow
-    ports:
-      - "5000:5000"
-    volumes:
-      - ./mlflow_data:/mlflow/mlflow_data
-      - ./mlflow_artifacts:/mlflow/mlflow_artifacts
     restart: unless-stopped
     networks:
       - dataset_gen_net
