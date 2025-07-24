@@ -6,6 +6,7 @@ import os
 from src.utils.logger import logger, setup_logger
 import time
 import random
+import csv
 
 setup_logger("synthetic-data-service", "INFO")
 
@@ -89,104 +90,166 @@ class AggregationPostProcessor(PostProcessor):
         include_metadata: bool,
         dataset_metadata: List[dict] = None,
     ) -> Dict[str, Any]:
-        """Aggregate JSON files with dynamic field mapping."""
-        aggregated = {"aggregated_data": [], "total_items": 0}
-
-        if include_metadata:
-            aggregated["metadata"] = {
-                "aggregation_timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "merge_strategy": merge_strategy,
-                "source_count": len(file_paths),
-            }
-
-        # Collect all items first
+        """Aggregate multiple JSON files into a single structure."""
         all_items = []
         id_counter = 1
 
         for i, file_path in enumerate(file_paths):
             try:
-                if not os.path.exists(file_path):
-                    logger.warning(f"File not found: {file_path}")
-                    continue
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
 
-                dataset_dir = Path(file_path)
-                json_files = list(dataset_dir.glob("*.json"))
-
-                current_dataset_metadata = (
+                # Get corresponding metadata for this file
+                metadata = (
                     dataset_metadata[i]
                     if dataset_metadata and i < len(dataset_metadata)
                     else {}
                 )
 
-                for json_file in json_files:
-                    if json_file.name == "metadata.json":
-                        continue
+                # Extract items from the JSON structure
+                if isinstance(data, list):
+                    items = data
+                elif isinstance(data, dict):
+                    # Look for common array fields
+                    items = data.get(
+                        "questions", data.get("data", data.get("items", [data]))
+                    )
+                else:
+                    items = [data]
 
-                    with open(json_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-
-                    items_to_add = data if isinstance(data, list) else [data]
-
-                    for item in items_to_add:
+                # Apply field mapping if enabled
+                if self.field_mapping_config.get("enabled", False):
+                    mapped_items = []
+                    for item in items:
                         mapped_item = self._apply_field_mapping(
-                            item, current_dataset_metadata, id_counter
+                            item, metadata, id_counter
                         )
-                        all_items.append(mapped_item)
+                        mapped_items.append(mapped_item)
                         id_counter += 1
+                    items = mapped_items
+
+                all_items.extend(items)
 
             except Exception as e:
-                logger.error(f"Error processing file {file_path}: {e}")
+                logger.warning(f"Error processing file {file_path}: {e}")
                 continue
 
-        # Shuffle all items and replace id with sequential values
+        # Get aggregation config
+        aggregation_config = self.config.get("dataset_generation", {}).get(
+            "aggregation", {}
+        )
+
+        # Check if shuffling is enabled
+        enable_shuffling = aggregation_config.get("enable_shuffling", False)
+
+        # Handle shuffling
         if all_items:
-            logger.info(f"Shuffling {len(all_items)} items")
-            random.shuffle(all_items)
+            if enable_shuffling:
+                logger.info(f"Shuffling {len(all_items)} items")
+                random.shuffle(all_items)
 
-            # Replace id with sequential values after shuffling
-            aggregated["aggregated_data"] = [
-                {**item, "id": str(idx + 1)} for idx, item in enumerate(all_items)
-            ]
-            aggregated["total_items"] = len(all_items)
+                # Re-assign sequential IDs after shuffling (preserving version_id format if used)
+                if self.field_mapping_config.get("enabled", False):
+                    # Get version_id from first item's metadata or config
+                    sample_metadata = dataset_metadata[0] if dataset_metadata else {}
+                    version_id = sample_metadata.get("version_id")
+                    if not version_id:
+                        aggregation_config = self.config.get(
+                            "dataset_generation", {}
+                        ).get("aggregation", {})
+                        version_id = aggregation_config.get("version_id")
 
-            logger.info("Added sequential id values after shuffling")
+                    # Re-assign IDs with proper formatting
+                    for idx, item in enumerate(all_items):
+                        if isinstance(item, dict):
+                            if version_id:
+                                item["id"] = f"{version_id}_{idx + 1}"
+                            else:
+                                item["id"] = str(idx + 1)
+
+                logger.info("Added sequential id values after shuffling")
+            else:
+                logger.info(f"Aggregating {len(all_items)} items without shuffling")
+
+                logger.info("Added sequential id values without shuffling")
+
+            # REMOVE THIS BLOCK - it was overriding the versioned IDs:
+            # # If field mapping wasn't applied earlier, assign sequential IDs now
+            # if not self.field_mapping_config.get("enabled", False):
+            #     for idx, item in enumerate(all_items):
+            #         if isinstance(item, dict):
+            #             item["id"] = str(idx + 1)
+
+        # Create aggregated structure
+        aggregated = {"aggregated_data": all_items, "total_items": len(all_items)}
+
+        # # Add metadata if requested
+        # if include_metadata:
+        #     aggregated["metadata"] = {
+        #         "aggregation_timestamp": datetime.now().isoformat(),
+        #         "source_count": len(file_paths),
+        #         "merge_strategy": merge_strategy
+        #     }
 
         return aggregated
 
     def _apply_field_mapping(
-        self, item: dict, dataset_metadata: dict, id_counter: int
-    ) -> dict:
-        """Apply field mapping configuration to transform the item."""
-        if not self.field_mapping_config.get("enabled", False):
-            return item
-
+        self, item: Dict[str, Any], metadata: Dict[str, Any], id_counter: int
+    ) -> Dict[str, Any]:
+        """Apply field mapping to transform item structure."""
         mapped_item = {}
 
-        # Apply payload to output mapping
-        payload_mapping = self.field_mapping_config.get("payload_to_output", {})
-        for payload_field, output_field in payload_mapping.items():
-            if payload_field in dataset_metadata:
-                mapped_item[output_field] = dataset_metadata[payload_field]
+        # Get version_id from metadata with fallback handling
+        version_id = metadata.get("version_id")
+        if not version_id:
+            aggregation_config = self.config.get("dataset_generation", {}).get(
+                "aggregation", {}
+            )
+            version_id = aggregation_config.get("version_id")
+        if not version_id:
+            version_id = None
 
-        # Apply defaults
-        defaults = self.field_mapping_config.get("defaults", {})
-        for field, default_value in defaults.items():
-            if field not in mapped_item:
-                if default_value == "auto_increment":
-                    mapped_item[field] = str(id_counter)
+        # Process payload_to_output mappings
+        for source_field, target_field in self.field_mapping_config.get(
+            "payload_to_output", {}
+        ).items():
+            if source_field in metadata and source_field != "version_id":
+                mapped_item[target_field] = metadata[source_field]
+
+        # Process defaults
+        for target_field, default_value in self.field_mapping_config.get(
+            "defaults", {}
+        ).items():
+            if default_value == "auto_increment":
+                if version_id:
+                    mapped_item[target_field] = f"{version_id}_{id_counter}"
                 else:
-                    mapped_item[field] = default_value
+                    mapped_item[target_field] = str(id_counter)
+            elif target_field == "dataset_version_id":
+                # Set from version_id if available, else use default
+                try:
+                    mapped_item[target_field] = (
+                        int(version_id) if version_id is not None else default_value
+                    )
+                except Exception:
+                    mapped_item[target_field] = default_value
+            else:
+                mapped_item[target_field] = default_value
 
-        # Copy content fields from generated data
-        content_fields = self.field_mapping_config.get("content_fields", [])
-        for field in content_fields:
-            if field in item:
-                mapped_item[field] = item[field]
-
-        # Copy any remaining fields from original item that aren't mapped
-        for key, value in item.items():
-            if key not in mapped_item:
-                mapped_item[key] = value
+        # Process content fields with proper renaming
+        content_fields = self.field_mapping_config.get("content_fields", {})
+        if isinstance(content_fields, dict):
+            for source_field, target_field in content_fields.items():
+                if source_field in item:
+                    mapped_item[target_field] = item[source_field]
+        elif isinstance(content_fields, list):
+            for field in content_fields:
+                if isinstance(field, dict):
+                    for source_field, target_field in field.items():
+                        if source_field in item:
+                            mapped_item[target_field] = item[source_field]
+                elif isinstance(field, str) and field in item:
+                    mapped_item[field] = item[field]
 
         return mapped_item
 
@@ -203,9 +266,9 @@ class AggregationPostProcessor(PostProcessor):
             )
 
             filename = aggregation_config.get("output_filename", "aggregated_data")
-            output_format = self.config.get("dataset_generation", {}).get(
+            output_format = aggregation_config.get(
                 "output_format", "json"
-            )
+            )  # Add this line
             merge_strategy = aggregation_config.get("merge_strategy", "combine_arrays")
             include_metadata = aggregation_config.get("include_metadata", True)
 
@@ -214,16 +277,44 @@ class AggregationPostProcessor(PostProcessor):
             os.makedirs(base_output_dir, exist_ok=True)
 
             logger.info(
-                f"Aggregating {len(output_paths)} datasets into {aggregated_path}"
+                f"Aggregating {len(output_paths)} datasets into {aggregated_path} as {output_format.upper()}"
             )
 
-            if output_format == "json":
+            if output_format == "csv":
+                # Generate CSV output without metadata
+                json_data = self._aggregate_json_files(
+                    output_paths, merge_strategy, include_metadata, dataset_metadata
+                )
+
+                csv_data = json_data.get("aggregated_data", [])
+
+                if csv_data:
+                    with open(aggregated_path, "w", newline="", encoding="utf-8") as f:
+                        csv_field_order = aggregation_config.get("csv_field_order")
+                        if csv_field_order:
+                            fieldnames = csv_field_order
+                        else:
+                            fieldnames = list(csv_data[0].keys())
+                        writer = csv.DictWriter(f, fieldnames=fieldnames)
+                        writer.writeheader()
+                        writer.writerows(csv_data)
+
+                    logger.info(
+                        f"Successfully created CSV file with {len(csv_data)} rows (metadata excluded)"
+                    )
+                else:
+                    logger.warning("No data to write to CSV file")
+
+            elif output_format == "json":
+                # Generate JSON output (existing logic with metadata)
                 aggregated_data = self._aggregate_json_files(
                     output_paths, merge_strategy, include_metadata, dataset_metadata
                 )
                 with open(aggregated_path, "w", encoding="utf-8") as f:
                     json.dump(aggregated_data, f, indent=2, ensure_ascii=False)
+
             else:
+                # Text format (existing logic)
                 aggregated_content = self._aggregate_text_files(
                     output_paths, include_metadata
                 )
