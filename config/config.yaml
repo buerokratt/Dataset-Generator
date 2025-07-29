@@ -32,15 +32,17 @@ generation:
 dataset_generation:
   structure_name: "single_question"
   prompt_template_name: "institute_topic_question"
-  traversal_strategy: "recursive"
+  traversal_strategy: "pattern"  # Options: "flat", "recursive", "institutional", "pattern"
   output_format: "json"
   num_samples: 10
   post_processing: "aggregation"  # Options: "zip", "aggregation"
   # Aggregation-specific configuration (only used when post_processing = "aggregation")
   aggregation:
     output_filename: "12"
+    output_format: "csv" 
     merge_strategy: "combine_arrays"
     include_metadata: true
+    enable_shuffling: false
 
     field_mapping:
       enabled: true
@@ -48,9 +50,18 @@ dataset_generation:
         agency_name: agency_name
         agency_id: agency_id
       defaults:
-        id: auto_increment
+        item_id: auto_increment
+        dataset_version_id: version_id
       content_fields:
-        - question
+        question: data_item
+        
+
+    csv_field_order:
+    - item_id
+    - agency_name
+    - agency_id
+    - data_item
+    - dataset_version_id
 
   parameters:
     language: "et"
@@ -75,10 +86,8 @@ data_sources:
   default:
     strategy: "pattern"
     base_path: "data"
-    patterns: ["**/*.json", "**/*.txt"]
+    patterns: ["**/cleaned.txt"]
     recursive: true
-    filter:
-      extensions: ["json", "txt"]
 
 callback:
   url: "http://ruuter-public:8086/global-classifier/data/callback"
