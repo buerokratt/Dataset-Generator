@@ -29,6 +29,9 @@ class DatasetRequest(BaseModel):
     version_id: Optional[str] = Field(
         "v1", description="Version identifier for the dataset"
     )
+    session_id: Optional[int] = Field(
+        None, description="Session ID for tracking dataset generation sessions"
+    )
 
     class Config:
         extra = "allow"  # Allow additional fields like agency_id, etc.
@@ -62,6 +65,13 @@ class DatasetRequest(BaseModel):
             if not re.match(r"^[a-zA-Z0-9._-]+$", v.strip()):
                 raise ValueError("version_id contains invalid characters")
         return v.strip() if v else "v1"
+
+    # @field_validator("session_id")
+    # @classmethod
+    # def validate_session_id(cls, v):
+    #     if v is not None and not isinstance(v, int):
+    #         raise ValueError("session_id must be an integer")
+    #     return v
 
 
 class BulkGenerateRequest(BaseModel):
@@ -375,6 +385,7 @@ async def background_generate_bulk(
         failed_count = 0
         common_output_filename = None
         agency_name = None  # Initialize agency_id to None
+        session_id = None  # Initialize session_id to None
 
         for i, dataset_request in enumerate(request_data.datasets):
             logger.info(
@@ -384,6 +395,14 @@ async def background_generate_bulk(
             # Store the output_filename from first dataset for final aggregation
             if common_output_filename is None and dataset_request.output_filename:
                 common_output_filename = dataset_request.output_filename
+
+            # NEW: Store session_id from the first dataset (assuming all datasets in bulk have same session_id)
+            if (
+                session_id is None
+                and hasattr(dataset_request, "session_id")
+                and dataset_request.session_id
+            ):
+                session_id = dataset_request.session_id
 
             agency_name = (
                 dataset_request.agency_name
@@ -516,12 +535,15 @@ async def background_generate_bulk(
                 cleaned_results.append(cleaned_result)
 
             callback_payload = {
-                "task_id": task_id,
+                "task_id": session_id,
                 "status": final_status,
                 "message": task_status_store[task_id]["message"],
                 "filePath": final_aggregated_path,
                 "results": cleaned_results,
             }
+            if session_id is not None:
+                callback_payload["session_id"] = session_id
+
             print(callback_payload)
             logger.info(
                 f"DEBUG: Sending callback to {callback_url} with payload: {callback_payload}"
