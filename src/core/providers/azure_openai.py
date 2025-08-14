@@ -272,7 +272,7 @@ Execute the task {num_samples} times now and return the JSON array:"""
                                     # Convert any other type to string
                                     valid_samples.append(json.dumps(sample))
                                     logger.debug(
-                                        f"✅ BATCH SAMPLE {i + 1}: {type(sample).__name__} format"
+                                        f"BATCH SAMPLE {i + 1}: {type(sample).__name__} format"
                                     )
 
                             if valid_samples:
