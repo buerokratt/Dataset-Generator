@@ -66,13 +66,6 @@ class DatasetRequest(BaseModel):
                 raise ValueError("version_id contains invalid characters")
         return v.strip() if v else "v1"
 
-    # @field_validator("session_id")
-    # @classmethod
-    # def validate_session_id(cls, v):
-    #     if v is not None and not isinstance(v, int):
-    #         raise ValueError("session_id must be an integer")
-    #     return v
-
 
 class BulkGenerateRequest(BaseModel):
     datasets: List[DatasetRequest] = Field(
@@ -306,7 +299,6 @@ async def process_single_dataset(
                 f"Performing individual {post_processing_type} post-processing for {dataset_request.data_path}"
             )
 
-            # base_output_dir = f"{output_dir}/{structure_name}"
             base_output_dir = f"{output_dir}"
             post_processor = PostProcessorFactory.create_post_processor(modified_config)
             final_output_path = post_processor.process(

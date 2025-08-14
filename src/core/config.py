@@ -56,7 +56,7 @@ class ConfigLoader:
     DEFAULT_PATHS = [
         "config/config.yaml",
         "src/config/config.yaml",
-        "/app/config/config.yaml",
+        "/app/config/config.yaml"
     ]
 
     @classmethod
@@ -144,6 +144,33 @@ class ConfigLoader:
             "PROVIDER_TIMEOUT": "provider.timeout",
             "PROVIDER_MAX_RETRIES": "provider.max_retries",
             "PROVIDER_RETRY_DELAY": "provider.retry_delay",
+            # Azure OpenAI provider settings
+            "AZURE_OPENAI_ENDPOINT": "azure_openai.azure_endpoint",
+            "AZURE_OPENAI_API_KEY": "azure_openai.api_key",
+            "AZURE_OPENAI_API_VERSION": "azure_openai.api_version",
+            "AZURE_OPENAI_DEPLOYMENT_NAME": "azure_openai.deployment_name",
+            "AZURE_OPENAI_MODEL_NAME": "azure_openai.model_name",
+            "AZURE_OPENAI_TEMPERATURE": "azure_openai.temperature",
+            "AZURE_OPENAI_MAX_TOKENS": "azure_openai.max_tokens",
+            "AZURE_OPENAI_TOP_P": "azure_openai.top_p",
+            "AZURE_OPENAI_TPM_LIMIT": "azure_openai.tpm_limit",
+            "AZURE_OPENAI_RPM_LIMIT": "azure_openai.rpm_limit",
+            "AZURE_OPENAI_BATCH_ENABLED": "azure_openai.batch_generation.enabled",
+            "AZURE_OPENAI_MAX_BATCH_SIZE": "azure_openai.batch_generation.max_batch_size",
+            "AZURE_OPENAI_MAX_TOKENS_PER_BATCH": "azure_openai.batch_generation.max_tokens_per_batch",
+            # Ollama provider settings
+            "OLLAMA_HOST": "ollama.host",
+            "OLLAMA_TIMEOUT": "ollama.timeout",
+            "OLLAMA_MAX_RETRIES": "ollama.max_retries",
+            "OLLAMA_RETRY_DELAY": "ollama.retry_delay",
+            "OLLAMA_MODEL_NAME": "ollama.model_name",
+            # Bedrock Anthropic provider settings
+            "BEDROCK_MODEL_NAME": "bedrock_anthropic.model_name",
+            "BEDROCK_AWS_REGION": "bedrock_anthropic.aws_region",
+            "BEDROCK_TEMPERATURE": "bedrock_anthropic.temperature",
+            "BEDROCK_MAX_TOKENS": "bedrock_anthropic.max_tokens",
+            "BEDROCK_TOP_P": "bedrock_anthropic.top_p",
+            "BEDROCK_TPM_LIMIT": "bedrock_anthropic.tpm_limit",
             # Directories
             "DATA_DIR": "directories.input",
             "OUTPUT_DIR": "directories.output",
@@ -154,6 +181,15 @@ class ConfigLoader:
             "DEFAULT_NUM_EXAMPLES": "generation.default_num_examples",
             "DEFAULT_TEMPERATURE": "generation.parameters.temperature",
             "MAX_TOKENS": "generation.parameters.max_tokens",
+            # Content processing
+            "MAX_CONTENT_LENGTH": "content_processing.max_content_length",
+            "CONTENT_OVERLAP": "content_processing.content_overlap",
+            # Language settings
+            "DEFAULT_SYSTEM_PROMPT": "language_settings.default_system_prompt",
+            # Storage settings
+            "DATASETS_DIR": "storage.datasets_dir",
+            "TEMPLATES_DIR_STORAGE": "storage.templates_dir",
+            "USER_CONFIGS_DIR_STORAGE": "storage.user_configs_dir",
         }
 
         for env_var, config_path in mappings.items():

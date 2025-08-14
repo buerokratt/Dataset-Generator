@@ -36,12 +36,8 @@ services:
     container_name: synthetic-data-service
     ports:
       - "8000:8000"
-    environment:
-      - PROVIDER_NAME=ollama
-      - MODEL_NAME=gemma3:1b-it-qat
-      - PROVIDER_API_URL=http://ollama:11434
-      - SERVICE_DEBUG=false
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    env_file:
+      - .env
     volumes:
       - ./config:/app/config
       - ./templates:/app/templates
