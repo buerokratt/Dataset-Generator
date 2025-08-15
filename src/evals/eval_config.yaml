@@ -3,7 +3,7 @@
 
 # General settings
 general:
-  output_dir: "evaluation_results"
+  output_dir: "u"
   stopwords_file: "data/estonian-stopwords.txt"
 
 # File structure configuration
@@ -12,18 +12,23 @@ file_structure:
   root_dir: "../../data"
   output_dir: "output"
   # Conversation files configuration
-  conversation_dir: "../../output_datasets/conversations"              # Root directory containing conversation files
-  conversation_file_pattern: "conversations.json"  # Pattern to match conversation files
+  conversation_dir: "../../data/questions"              # Root directory containing conversation files
+  conversation_file_pattern: "faq.json"  # Pattern to match conversation files
   check_json_fallback: true
   prefer_json: true  # Prioritize finding JSON conversation files
+  
   # JSON format configuration for conversations
-  conversation_json_format: "messages"  # Indicates messages array format
-  conversation_speaker_key: "role"      # Field identifying the speaker role
-  conversation_content_key: "content"   # Field containing the message content
+  # Structure: conversation_dir/agency_1/topic_1/conversations.json
+  # Where conversations.json contains: [{"question": "text1"}, {"question": "text2"}, ...]
+  conversation_json_format: "simple_array"  # Format type: "simple_array", "messages"
+  conversation_question_key: "question"     # Key to extract question text from JSON objects
+  conversation_speaker_key: "role"          # Field identifying the speaker role (for messages format)
+  conversation_content_key: "content"       # Field containing the message content (for messages format)
+  
   # Simple topic directory structure (agency/topic.txt)
   simplified_topic_structure: true  # Enable simple topic structure handling
   # Topic document files configuration
-  topic_dir: "../../data"                     # Root directory containing topic documents
+  topic_dir: "../../data/topics"                     # Root directory containing topic documents
   topic_file_pattern: "*.txt"           # Pattern to match topic document files
   agency_subdir_pattern: "*"
   topic_subdir_pattern: "*"

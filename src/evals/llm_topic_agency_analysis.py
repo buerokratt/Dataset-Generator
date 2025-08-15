@@ -16,8 +16,6 @@ logger.remove()
 logger.add(sys.stdout, format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
 
 
-
-
 class TopicAgencyFitEvaluator:
     """
     A qualitative evaluator that assesses how well conversations fit their intended topics
@@ -28,7 +26,6 @@ class TopicAgencyFitEvaluator:
         self,
         cpu_only: bool = False,
         device: str = None,
-
     ):
         """
         Initialize the evaluator with a lightweight model.
@@ -80,12 +77,11 @@ class TopicAgencyFitEvaluator:
     def _define_evaluation_criteria(self) -> Dict[str, str]:
         """Define the evaluation criteria templates."""
         prompt_file = self.config.get("qualitative_evaluation.prompt_file_topic")
-        
-        with open(prompt_file, 'r', encoding='utf-8') as f:
+
+        with open(prompt_file, "r", encoding="utf-8") as f:
             prompt_data = json.load(f)
         return prompt_data
-    
-    
+
     def _extract_score(self, response: str) -> Tuple[Optional[float], str]:
         """
         Extract numerical score from a generated response.
@@ -201,7 +197,6 @@ class TopicAgencyFitEvaluator:
 
         # If no match, provide a generic description
         return f"This is an Estonian government agency named '{agency_name}'."
-
 
     def evaluate_topic_agency_fit(
         self,
@@ -576,7 +571,7 @@ def evaluate_topic_file(
     topic_file_path: str,
     agency_dir: str,
     conversation_dir: str,
-    output_dir: str
+    output_dir: str,
 ) -> Dict[str, Any]:
     """
     Evaluate conversations for a topic based on a topic file.
@@ -608,12 +603,18 @@ def evaluate_topic_file(
 
     # Find conversation files
     config = Config()
-    conversation_files = sorted(list(Path(topic_conversation_dir).glob(config.get("general.conversation_pattern"))))
+    conversation_files = sorted(
+        list(
+            Path(topic_conversation_dir).glob(
+                config.get("general.conversation_pattern")
+            )
+        )
+    )
 
     if not conversation_files:
-        logger.warning(
-            f"No conversation files matching pattern '{config.get("general.conversation_pattern")}' found in {topic_conversation_dir}"
-        )
+        # logger.warning(
+        #    f"No conversation files matching pattern '{config.get("general.conversation_pattern")}' found in {topic_conversation_dir}"
+        # )
         return {
             "topic_name": topic_name,
             "error": f"No conversation files found in {topic_conversation_dir}",
@@ -982,10 +983,10 @@ def _generate_topic_fit_report(
 
 
     """
-    # write to json 
+    # write to json
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
-            
+
 
 def _generate_agency_fit_report(agency_summary: Dict[str, Any], output_file: str):
     """
@@ -996,4 +997,3 @@ def _generate_agency_fit_report(agency_summary: Dict[str, Any], output_file: str
     # write to json
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(agency_summary, f, ensure_ascii=False, indent=2)
-        
