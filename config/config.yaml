@@ -162,12 +162,6 @@ data_sources:
     patterns: ["**/cleaned.txt"]
     recursive: true
 
-# Callback configuration
-callback:
-  url: "http://ruuter-public:8086/global-classifier/data/callback"
-  max_retries: 3
-  timeout: 30
-
 # Relevance Score Analysis
 relevance_score:
   enabled: true
