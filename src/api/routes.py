@@ -411,7 +411,7 @@ async def process_single_dataset(
         final_evaluation_results = None
         best_evaluation = None
         best_results = None
-
+        eval_results = []
         while attempt < max_regeneration_attempts:
             attempt += 1
             logger.info(
@@ -423,7 +423,6 @@ async def process_single_dataset(
             all_output_paths = []
             results = []
             generation_errors = []
-
             for source in data_sources:
                 # Check timeout before processing each source
                 if time.time() - start_time > timeout_seconds:
@@ -489,7 +488,8 @@ async def process_single_dataset(
 
                     all_output_paths.append(result_path)
                     results.append({"source": source.path, "output_path": result_path})
-                    logger.info(results)
+                    eval_results.append({"source": source.path, "output_path": result_path})
+
                 except Exception as source_error:
                     error_msg = f"Failed to generate dataset for source {source.path}: {str(source_error)}"
                     logger.error(error_msg)
@@ -530,7 +530,7 @@ async def process_single_dataset(
                 agencies_for_evaluation = []
                 topics_for_evaluation = []
 
-                for result in results:
+                for result in eval_results:
                     output_path = result["output_path"]
                     # Extract agency and topic from the output path structure
                     # Expected format: output_dir/structure_name/agency_name/topic
@@ -587,7 +587,7 @@ async def process_single_dataset(
                 logger.info("Generating question embeddings for evaluation")
                 questions_by_context = {}
 
-                for result in results:
+                for result in eval_results:
                     output_path = result["output_path"]
                     # Try to read the generated FAQs to get questions
                     faqs_path = os.path.join(output_path, "faqs.json")
@@ -662,7 +662,7 @@ async def process_single_dataset(
                 # Use smart evaluation with the embedding manager and session ID
                 embedding_manager = get_embedding_manager_from_config(config)
                 evaluation_results = eval_single_agency_level(
-                    results=results,
+                    results=eval_results,
                     embedding_manager=embedding_manager,
                     session_id=evaluation_session_id,
                 )
@@ -676,13 +676,13 @@ async def process_single_dataset(
                     "overall_score", 0
                 ) > best_evaluation.get("overall_score", 0):
                     best_evaluation = evaluation_results
-                    best_results = results
+                    best_results = eval_results
 
                 if not should_regenerate:
                     logger.info(
                         f"Evaluation passed on attempt {attempt}, stopping regeneration"
                     )
-                    final_results = results
+                    final_results = eval_results
                     final_evaluation_results = evaluation_results
                     break
                 else:
@@ -705,7 +705,7 @@ async def process_single_dataset(
                     "overall_score", 0
                 ) > best_evaluation.get("overall_score", 0):
                     best_evaluation = evaluation_results
-                    best_results = results
+                    best_results = eval_results
 
             # Clean up temporary embeddings if we're going to regenerate
             if (

@@ -76,7 +76,6 @@ class UnifiedEvaluator:
         )
 
         try:
-            # FIXED: Extract correct agency-topic pairs from results instead of cross product
             if results:
                 valid_pairs = self._extract_valid_agency_topic_pairs(results)
                 logger.info(
@@ -91,14 +90,12 @@ class UnifiedEvaluator:
                     f"Using cross-product approach: {len(valid_pairs)} combinations"
                 )
 
-            # FIXED: Use new pair-based API instead of cross-product
             topic_embeddings_by_context = (
                 self.embedding_manager.get_embeddings_for_pairs(
                     valid_pairs, results=results
                 )
             )
 
-            # No filtering needed - we already got exactly what we asked for
             filtered_topic_embeddings = topic_embeddings_by_context
 
             if not filtered_topic_embeddings:
