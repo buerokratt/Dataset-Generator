@@ -4,6 +4,13 @@ import httpx
 from src.core.data_generator import DataGenerator
 from src.core.data_source import DataSourceManager
 from src.core.post_processor_factory import PostProcessorFactory
+
+# Import the corrected unified evaluator
+from src.eval.unified_evaluator import eval_single_agency_level
+
+# Import the unified Redis embedding manager
+from src.eval.redis_embedding_manager import UnifiedEmbeddingManager
+
 from pydantic import BaseModel, Field, field_validator
 from src.utils.logger import logger
 import time
@@ -11,11 +18,68 @@ import uuid
 import asyncio
 import re
 import os
+import json
 
 router = APIRouter()
 
 # Store for tracking background task status
 task_status_store = {}
+
+# Global unified embedding manager instance
+unified_embedding_manager = None
+
+
+def get_embedding_manager(request: Request) -> UnifiedEmbeddingManager:
+    """Get or create unified embedding manager instance."""
+    global unified_embedding_manager
+    if unified_embedding_manager is None:
+        # Get configuration from request
+        config = request.app.state.config
+
+        # Extract configuration
+        model_name = config.get("models", {}).get(
+            "embedding_model", "paraphrase-multilingual-mpnet-base-v2"
+        )
+        redis_url = config.get("redis", {}).get(
+            "url", os.environ.get("REDIS_URL", "redis://localhost:6379")
+        )
+        topic_documents_path = config.get("embedding", {}).get(
+            "topic_documents_path", "topic_documents"
+        )
+
+        unified_embedding_manager = UnifiedEmbeddingManager(
+            model_name=model_name,
+            redis_url=redis_url,
+            topic_documents_path=topic_documents_path,
+        )
+        logger.info("Initialized unified embedding manager")
+
+    return unified_embedding_manager
+
+
+def get_embedding_manager_from_config(config: dict) -> UnifiedEmbeddingManager:
+    """Get or create unified embedding manager from config dict."""
+    global unified_embedding_manager
+    if unified_embedding_manager is None:
+        # Extract configuration
+        model_name = config.get("models", {}).get(
+            "embedding_model", "paraphrase-multilingual-mpnet-base-v2"
+        )
+        redis_url = config.get("redis", {}).get(
+            "url", os.environ.get("REDIS_URL", "redis://localhost:6379")
+        )
+        topic_documents_path = config.get("embedding", {}).get(
+            "topic_documents_path", "topic_documents"
+        )
+
+        unified_embedding_manager = UnifiedEmbeddingManager(
+            model_name=model_name,
+            redis_url=redis_url,
+            topic_documents_path=topic_documents_path,
+        )
+        logger.info("Initialized unified embedding manager from config")
+
+    return unified_embedding_manager
 
 
 class DatasetRequest(BaseModel):
@@ -199,24 +263,27 @@ async def process_single_dataset(
     agency_name: str,
 ) -> dict:
     """
-    Process a single dataset generation request.
+    Process a single dataset generation request with Redis-based embedding caching.
 
     This function handles the end-to-end logic for generating a synthetic dataset based on the parameters
-    provided in a DatasetRequest. It loads data sources according to the specified traversal strategy and filter,
-    applies the configured structure and prompt template, and invokes the DataGenerator to produce the dataset.
-    After generation, it optionally performs post-processing (such as zipping or aggregation) on the output files.
+    provided in a DatasetRequest. It now includes Redis-based embedding management for better performance
+    and proper cleanup of temporary embeddings based on evaluation results.
 
     Args:
         dataset_request (DatasetRequest): The dataset generation request containing source path, output filename, and other parameters.
         config (dict): The full configuration dictionary, including dataset generation and directory settings.
         data_generator (DataGenerator): The main generator instance used to create synthetic datasets.
         task_id (str): The unique identifier for the current bulk generation task.
+        agency_name (str): Name of the agency being processed.
 
     Returns:
         dict: A dictionary containing the result of the dataset generation, including success status, output paths,
               any errors encountered, and metadata about the dataset and configuration used.
 
     Notes:
+        - Now integrates with Redis for embedding management
+        - Automatically cleans up temporary embeddings after successful evaluation
+        - Keeps topic embeddings cached for future use
         - Supports both individual and bulk post-processing modes (e.g., zip, aggregation).
         - Handles validation and error reporting for missing data sources or configuration issues.
         - Used internally by the bulk dataset generation API endpoint.
@@ -229,6 +296,11 @@ async def process_single_dataset(
         "recoverable": False,
     }
 
+    evaluation_session_id = None
+    max_regeneration_attempts = config.get("evaluation", {}).get(
+        "max_regeneration_attempts", 3
+    )
+    logger.info(dataset_request)
     try:
         start_time = time.time()
         timeout_seconds = config.get("processing", {}).get(
@@ -333,108 +405,349 @@ async def process_single_dataset(
             f"Found {len(data_sources)} data sources to process for {data_path}"
         )
 
-        error_details["stage"] = "dataset_generation"
-        # Track all output paths for post-processing
-        all_output_paths = []
-        results = []
-        generation_errors = []
+        # Regeneration loop - generate and evaluate until thresholds are met or max attempts reached
+        attempt = 0
+        final_results = None
+        final_evaluation_results = None
+        best_evaluation = None
+        best_results = None
 
-        for source in data_sources:
-            # Check timeout before processing each source
-            if time.time() - start_time > timeout_seconds:
+        while attempt < max_regeneration_attempts:
+            attempt += 1
+            logger.info(
+                f"Generation attempt {attempt}/{max_regeneration_attempts} for {data_path}"
+            )
+
+            error_details["stage"] = "dataset_generation"
+            # Track all output paths for post-processing
+            all_output_paths = []
+            results = []
+            generation_errors = []
+
+            for source in data_sources:
+                # Check timeout before processing each source
+                if time.time() - start_time > timeout_seconds:
+                    error_details.update(
+                        {
+                            "category": "timeout_error",
+                            "stage": "dataset_generation",
+                            "recoverable": False,
+                            "details": f"Operation timed out after {timeout_seconds} seconds during source processing",
+                        }
+                    )
+                    return {
+                        "success": False,
+                        "error": f"Processing timeout after {timeout_seconds} seconds",
+                        "error_details": error_details,
+                        "dataset_metadata": dataset_request.dict(),
+                        "partial_results": results,
+                    }
+
+                try:
+                    # Extract metadata for parameters
+                    source_params = parameters.copy()
+
+                    # Add source metadata to parameters
+                    if traversal_strategy == "institutional":
+                        source_params["institution"] = source.metadata.get(
+                            "institution", "unknown"
+                        )
+                        source_params["topic"] = source.metadata.get("topic", "unknown")
+                        source_params["topic_content"] = source.content
+                    else:
+                        source_params["file_path"] = source.path
+                        source_params["file_content"] = source.content
+                        source_params["file_name"] = source.name
+
+                        for key, value in source.metadata.items():
+                            if key not in source_params:
+                                source_params[key] = value
+
+                    # Determine output path based on metadata
+                    if traversal_strategy == "institutional":
+                        topic = source.metadata.get("topic", "unknown")
+                        output_base_path = (
+                            f"{output_dir}/{structure_name}/{agency_name}/{topic}"
+                        )
+                    else:
+                        rel_path = source.metadata.get("relative_path", source.name)
+                        output_base_path = f"{output_dir}/{agency_name}/{rel_path}"
+
+                    logger.info(
+                        f"Generating dataset for source: {source.path} -> {output_base_path}"
+                    )
+
+                    # Generate dataset
+                    result_path = data_generator.generate(
+                        structure_name=structure_name,
+                        prompt_template_name=prompt_template_name,
+                        output_base_path=output_base_path,
+                        num_examples=num_examples,
+                        output_format=output_format,
+                        parameters=source_params,
+                    )
+
+                    all_output_paths.append(result_path)
+                    results.append({"source": source.path, "output_path": result_path})
+                    logger.info(results)
+                except Exception as source_error:
+                    error_msg = f"Failed to generate dataset for source {source.path}: {str(source_error)}"
+                    logger.error(error_msg)
+                    generation_errors.append(
+                        {
+                            "source": source.path,
+                            "error": str(source_error),
+                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        }
+                    )
+                    # Continue processing other sources instead of failing completely
+
+            # Check if we have any successful results
+            if not all_output_paths and generation_errors:
                 error_details.update(
                     {
-                        "category": "timeout_error",
+                        "category": "generation_error",
                         "stage": "dataset_generation",
                         "recoverable": False,
-                        "details": f"Operation timed out after {timeout_seconds} seconds during source processing",
+                        "details": f"All {len(generation_errors)} sources failed to generate",
+                        "source_errors": generation_errors,
                     }
                 )
                 return {
                     "success": False,
-                    "error": f"Processing timeout after {timeout_seconds} seconds",
+                    "error": f"All {len(generation_errors)} data sources failed to generate datasets",
                     "error_details": error_details,
                     "dataset_metadata": dataset_request.dict(),
-                    "partial_results": results,
+                    "generation_errors": generation_errors,
                 }
+            logger.info(results)
+
+            # === UNIFIED EMBEDDING MANAGEMENT FOR EVALUATION ===
+            error_details["stage"] = "embedding_preloading"
 
             try:
-                # Extract metadata for parameters
-                source_params = parameters.copy()
+                # Extract unique agencies and topics from results for embedding preloading
+                agencies_for_evaluation = []
+                topics_for_evaluation = []
 
-                # Add source metadata to parameters
-                if traversal_strategy == "institutional":
-                    source_params["institution"] = source.metadata.get(
-                        "institution", "unknown"
+                for result in results:
+                    output_path = result["output_path"]
+                    # Extract agency and topic from the output path structure
+                    # Expected format: output_dir/structure_name/agency_name/topic
+                    path_parts = (
+                        output_path.replace(output_dir, "").strip("/").split("/")
                     )
-                    source_params["topic"] = source.metadata.get("topic", "unknown")
-                    source_params["topic_content"] = source.content
-                else:
-                    source_params["file_path"] = source.path
-                    source_params["file_content"] = source.content
-                    source_params["file_name"] = source.name
 
-                    for key, value in source.metadata.items():
-                        if key not in source_params:
-                            source_params[key] = value
+                    if len(path_parts) >= 3:
+                        extracted_agency = path_parts[1]  # agency_name
+                        extracted_topic = path_parts[2]  # topic
 
-                # Determine output path based on metadata
-                if traversal_strategy == "institutional":
-                    topic = source.metadata.get("topic", "unknown")
-                    output_base_path = (
-                        f"{output_dir}/{structure_name}/{agency_name}/{topic}"
+                        if extracted_agency not in agencies_for_evaluation:
+                            agencies_for_evaluation.append(extracted_agency)
+                        if extracted_topic not in topics_for_evaluation:
+                            topics_for_evaluation.append(extracted_topic)
+
+                # Ensure we have agencies and topics for evaluation
+                if not agencies_for_evaluation:
+                    agencies_for_evaluation = (
+                        [agency_name] if agency_name else ["unknown"]
                     )
-                else:
-                    rel_path = source.metadata.get("relative_path", source.name)
-                    output_base_path = f"{output_dir}/{agency_name}/{rel_path}"
+                if not topics_for_evaluation:
+                    topics_for_evaluation = ["unknown"]
 
                 logger.info(
-                    f"Generating dataset for source: {source.path} -> {output_base_path}"
+                    f"Preloading embeddings for evaluation: {agencies_for_evaluation} agencies, {topics_for_evaluation} topics"
                 )
 
-                # Generate dataset
-                result_path = data_generator.generate(
-                    structure_name=structure_name,
-                    prompt_template_name=prompt_template_name,
-                    output_base_path=output_base_path,
-                    num_examples=num_examples,
-                    output_format=output_format,
-                    parameters=source_params,
+                # Get unified embedding manager
+                embedding_manager = get_embedding_manager_from_config(config)
+
+                # Preload topic embeddings (generates and caches automatically)
+                # Pass the results so embedding manager can extract content from metadata.json
+                topic_embeddings_by_context = (
+                    embedding_manager.get_bulk_topic_embeddings(
+                        agencies_for_evaluation,
+                        topics_for_evaluation,
+                        results=results,  # Pass results for content extraction
+                    )
                 )
 
-                all_output_paths.append(result_path)
-                results.append({"source": source.path, "output_path": result_path})
+                preload_success = len(topic_embeddings_by_context) > 0
 
-            except Exception as source_error:
-                error_msg = f"Failed to generate dataset for source {source.path}: {str(source_error)}"
-                logger.error(error_msg)
-                generation_errors.append(
-                    {
-                        "source": source.path,
-                        "error": str(source_error),
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    }
+                if not preload_success:
+                    logger.warning(
+                        "Failed to preload topic embeddings, evaluation may fail"
+                    )
+                else:
+                    logger.info(
+                        f"Successfully preloaded topic embeddings for {len(topic_embeddings_by_context)} contexts"
+                    )
+
+                # Pre-generate and cache question embeddings
+                logger.info("Generating question embeddings for evaluation")
+                questions_by_context = {}
+
+                for result in results:
+                    output_path = result["output_path"]
+                    # Try to read the generated FAQs to get questions
+                    faqs_path = os.path.join(output_path, "faqs.json")
+
+                    if os.path.exists(faqs_path):
+                        try:
+                            with open(faqs_path, "r", encoding="utf-8") as f:
+                                faqs = json.load(f)
+
+                            if isinstance(faqs, list):
+                                # Extract agency and topic from path
+                                path_parts = (
+                                    output_path.replace(output_dir, "")
+                                    .strip("/")
+                                    .split("/")
+                                )
+                                if len(path_parts) >= 3:
+                                    result_agency = path_parts[1]
+                                    result_topic = path_parts[2]
+
+                                    questions = []
+                                    for faq in faqs:
+                                        if isinstance(faq, dict) and "question" in faq:
+                                            question_text = faq["question"].strip()
+                                            if question_text:
+                                                questions.append(question_text)
+
+                                    if questions:
+                                        context_key = (result_agency, result_topic)
+                                        if context_key not in questions_by_context:
+                                            questions_by_context[context_key] = []
+                                        questions_by_context[context_key].extend(
+                                            questions
+                                        )
+
+                        except Exception as faq_error:
+                            logger.warning(
+                                f"Failed to read FAQs from {faqs_path}: {faq_error}"
+                            )
+
+                # Generate and cache question embeddings
+                if questions_by_context:
+                    try:
+                        evaluation_session_id = (
+                            embedding_manager.start_question_session()
+                        )
+                        question_embeddings_by_context = (
+                            embedding_manager.generate_and_cache_question_embeddings(
+                                evaluation_session_id, questions_by_context
+                            )
+                        )
+                        logger.info(
+                            f"Generated and cached question embeddings for {len(question_embeddings_by_context)} contexts"
+                        )
+                    except Exception as q_error:
+                        logger.warning(
+                            f"Failed to generate question embeddings: {q_error}"
+                        )
+                        evaluation_session_id = None
+                else:
+                    logger.warning("No questions found to generate embeddings")
+
+            except Exception as embedding_error:
+                logger.warning(f"Error during embedding management: {embedding_error}")
+                preload_success = False
+                evaluation_session_id = None
+
+            # === EVALUATION WITH SMART REDIS INTEGRATION ===
+            error_details["stage"] = "evaluation"
+
+            try:
+                # Use smart evaluation with the embedding manager and session ID
+                embedding_manager = get_embedding_manager_from_config(config)
+                evaluation_results = eval_single_agency_level(
+                    results=results,
+                    embedding_manager=embedding_manager,
+                    session_id=evaluation_session_id,
                 )
-                # Continue processing other sources instead of failing completely
+                logger.info(f"Smart evaluation results: {evaluation_results}")
 
-        # Check if we have any successful results
-        if not all_output_paths and generation_errors:
-            error_details.update(
-                {
-                    "category": "generation_error",
-                    "stage": "dataset_generation",
-                    "recoverable": False,
-                    "details": f"All {len(generation_errors)} sources failed to generate",
-                    "source_errors": generation_errors,
+                # Check if evaluation passed
+                should_regenerate = evaluation_results.get("should_regenerate", True)
+
+                # Keep track of the best evaluation so far
+                if best_evaluation is None or evaluation_results.get(
+                    "overall_score", 0
+                ) > best_evaluation.get("overall_score", 0):
+                    best_evaluation = evaluation_results
+                    best_results = results
+
+                if not should_regenerate:
+                    logger.info(
+                        f"Evaluation passed on attempt {attempt}, stopping regeneration"
+                    )
+                    final_results = results
+                    final_evaluation_results = evaluation_results
+                    break
+                else:
+                    logger.info(
+                        f"Evaluation failed on attempt {attempt}, overall_score: {evaluation_results.get('overall_score', 0)}"
+                    )
+
+            except Exception as eval_error:
+                logger.error(f"Smart evaluation failed: {eval_error}")
+                # This should not happen as smart eval has built-in fallback
+                evaluation_results = {
+                    "decision": "REGENERATE",
+                    "should_regenerate": True,
+                    "error": str(eval_error),
+                    "overall_score": 0.0,
                 }
+
+                # Keep track of the best evaluation so far (even failed ones)
+                if best_evaluation is None or evaluation_results.get(
+                    "overall_score", 0
+                ) > best_evaluation.get("overall_score", 0):
+                    best_evaluation = evaluation_results
+                    best_results = results
+
+            # Clean up temporary embeddings if we're going to regenerate
+            if (
+                evaluation_session_id
+                and should_regenerate
+                and attempt < max_regeneration_attempts
+            ):
+                try:
+                    embedding_manager.cleanup_question_session(evaluation_session_id)
+                    logger.info(
+                        f"Cleaned up temporary embeddings after attempt {attempt}"
+                    )
+                except Exception as cleanup_error:
+                    logger.warning(f"Error during embedding cleanup: {cleanup_error}")
+
+        # If we didn't find a passing evaluation, use the best one we found
+        if final_results is None:
+            logger.info(
+                f"Max regeneration attempts ({max_regeneration_attempts}) reached, using best result"
             )
-            return {
-                "success": False,
-                "error": f"All {len(generation_errors)} data sources failed to generate datasets",
-                "error_details": error_details,
-                "dataset_metadata": dataset_request.dict(),
-                "generation_errors": generation_errors,
-            }
+            final_results = best_results
+            final_evaluation_results = best_evaluation
+
+        # === HANDLE EMBEDDING CLEANUP BASED ON FINAL EVALUATION RESULTS ===
+        try:
+            if (
+                evaluation_session_id
+                and final_evaluation_results
+                and final_evaluation_results.get("decision") == "ACCEPT"
+            ):
+                logger.info(
+                    "Final evaluation successful - cleaning up temporary question embeddings"
+                )
+                embedding_manager = get_embedding_manager_from_config(config)
+                embedding_manager.cleanup_question_session(evaluation_session_id)
+            elif evaluation_session_id:
+                logger.info(
+                    "Final evaluation failed - keeping question embeddings for potential reuse (will auto-expire)"
+                )
+                # Question embeddings will expire naturally based on TTL
+        except Exception as cleanup_error:
+            logger.warning(f"Error during final embedding cleanup: {cleanup_error}")
 
         error_details["stage"] = "post_processing"
         # MODIFIED: Post-processing logic to handle cross-dataset aggregation
@@ -450,9 +763,10 @@ async def process_single_dataset(
             result = {
                 "success": True,
                 "dataset_metadata": dataset_request.model_dump(),
+                "metrics": final_evaluation_results,
                 "post_processing_type": post_processing_type,
                 "final_output_path": None,  # Will be set after cross-dataset aggregation
-                "_internal_results": results,  # Keep for internal aggregation logic (NOT exposed in callback)
+                "_internal_results": final_results,  # Keep for internal aggregation logic (NOT exposed in callback)
                 "configuration_used": {
                     "structure_name": structure_name,
                     "prompt_template_name": prompt_template_name,
@@ -461,6 +775,12 @@ async def process_single_dataset(
                     "output_format": output_format,
                     "post_processing": post_processing_type,
                 },
+                "embedding_session_id": evaluation_session_id,  # Track for potential cleanup
+                "embedding_preload_success": preload_success
+                if "preload_success" in locals()
+                else False,
+                "regeneration_attempts": attempt,
+                "max_regeneration_attempts": max_regeneration_attempts,
             }
 
             # Add error information if there were partial failures
@@ -469,7 +789,7 @@ async def process_single_dataset(
                     {
                         "generation_errors": generation_errors,
                         "sources_processed": len(data_sources),
-                        "sources_successful": len(results),
+                        "sources_successful": len(final_results),
                         "sources_failed": len(generation_errors),
                     }
                 )
@@ -503,7 +823,10 @@ async def process_single_dataset(
                     "error": f"Post-processing failed: {str(post_error)}",
                     "error_details": error_details,
                     "dataset_metadata": dataset_request.dict(),
-                    "_internal_results": results,
+                    "_internal_results": final_results,
+                    "embedding_session_id": evaluation_session_id,
+                    "regeneration_attempts": attempt,
+                    "max_regeneration_attempts": max_regeneration_attempts,
                 }
                 if generation_errors:
                     result["generation_errors"] = generation_errors
@@ -513,9 +836,10 @@ async def process_single_dataset(
                 result = {
                     "success": True,
                     "dataset_metadata": dataset_request.dict(),
+                    "metrics": final_evaluation_results,
                     "post_processing_type": post_processing_type,
                     "final_output_path": final_output_path,
-                    "_internal_results": results,
+                    "_internal_results": final_results,
                     "configuration_used": {
                         "structure_name": structure_name,
                         "prompt_template_name": prompt_template_name,
@@ -524,6 +848,12 @@ async def process_single_dataset(
                         "output_format": output_format,
                         "post_processing": post_processing_type,
                     },
+                    "embedding_session_id": evaluation_session_id,
+                    "embedding_preload_success": preload_success
+                    if "preload_success" in locals()
+                    else False,
+                    "regeneration_attempts": attempt,
+                    "max_regeneration_attempts": max_regeneration_attempts,
                 }
 
                 # Add error information if there were partial failures
@@ -532,7 +862,7 @@ async def process_single_dataset(
                         {
                             "generation_errors": generation_errors,
                             "sources_processed": len(data_sources),
-                            "sources_successful": len(results),
+                            "sources_successful": len(final_results),
                             "sources_failed": len(generation_errors),
                         }
                     )
@@ -552,7 +882,10 @@ async def process_single_dataset(
                     "error": "Post-processing failed",
                     "error_details": error_details,
                     "dataset_metadata": dataset_request.dict(),
-                    "_internal_results": results,
+                    "_internal_results": final_results,
+                    "embedding_session_id": evaluation_session_id,
+                    "regeneration_attempts": attempt,
+                    "max_regeneration_attempts": max_regeneration_attempts,
                 }
                 if generation_errors:
                     result["generation_errors"] = generation_errors
@@ -596,11 +929,23 @@ async def process_single_dataset(
         logger.exception(
             f"Error processing dataset {dataset_request.data_path}: {str(e)}"
         )
+
+        # Clean up evaluation session on error
+        if evaluation_session_id:
+            try:
+                embedding_manager = get_embedding_manager_from_config(config)
+                embedding_manager.cleanup_question_session(evaluation_session_id)
+            except Exception as cleanup_error:
+                logger.warning(
+                    f"Error cleaning up embeddings after failure: {cleanup_error}"
+                )
+
         return {
             "success": False,
             "error": str(e),
             "error_details": error_details,
             "dataset_metadata": dataset_request.dict(),
+            "embedding_session_id": evaluation_session_id,
         }
 
 
@@ -611,12 +956,11 @@ async def background_generate_bulk(
     data_generator: DataGenerator,
 ):
     """
-    Background task for processing bulk dataset generation requests.
+    Background task for processing bulk dataset generation requests with Redis-based embedding management.
 
     This function is executed as a background task to generate multiple datasets in parallel, based on the list of
-    DatasetRequest objects provided in the BulkGenerateRequest. It tracks progress and status using the task_id,
-    updates the task_status_store, and performs optional cross-dataset post-processing (such as aggregation or zipping).
-    Upon completion or failure, it updates the task status and can send a callback notification if configured.
+    DatasetRequest objects provided in the BulkGenerateRequest. It now includes Redis-based embedding management
+    for better performance and memory management across datasets.
 
     Args:
         task_id (str): Unique identifier for this bulk generation task, used for status tracking.
@@ -629,6 +973,8 @@ async def background_generate_bulk(
 
     Notes:
         - Each dataset in the request is processed sequentially.
+        - Uses Redis for embedding caching and management.
+        - Automatically cleans up temporary embeddings based on evaluation results.
         - Supports cross-dataset aggregation or zipping if configured.
         - Internal results and metadata are managed for advanced post-processing.
     """
@@ -915,12 +1261,15 @@ async def generate_bulk_dataset(
     data_generator: DataGenerator = Depends(get_data_generator),
 ):
     """
-    Generate multiple datasets in bulk as a background task.
+    Generate multiple datasets in bulk as a background task with Redis-based embedding management.
 
     Accepts a list of datasets with flexible metadata and returns immediately with a task_id.
+    Now includes Redis-based embedding caching for improved performance and memory management.
     Supports callback notifications when processing is complete.
     """
-    logger.info("Received bulk dataset generation request")
+    logger.info(
+        "Received bulk dataset generation request with Redis embedding management"
+    )
     try:
         logger.info(
             f"Received bulk generation request for {len(request.datasets)} datasets"
@@ -930,6 +1279,13 @@ async def generate_bulk_dataset(
         if not request.datasets:
             raise HTTPException(
                 status_code=400, detail="At least one dataset must be provided"
+            )
+
+        # Check Redis health before starting
+        if not get_embedding_manager(fastapi_request).health_check():
+            logger.error("Redis connection unhealthy")
+            raise HTTPException(
+                status_code=503, detail="Redis embedding cache unavailable"
             )
 
         # Generate unique task ID
@@ -948,9 +1304,10 @@ async def generate_bulk_dataset(
             "completed_datasets": 0,
             "results": [],
             "error": None,
+            "redis_enabled": True,
         }
 
-        # Add background task
+        # Add background task with unified embedding manager
         background_tasks.add_task(
             background_generate_bulk, task_id, request, config, data_generator
         )
@@ -960,7 +1317,7 @@ async def generate_bulk_dataset(
         return GenerateResponse(
             task_id=task_id,
             status="accepted",
-            message=f"Dataset generation task has been queued for {len(request.datasets)} datasets. Use the task_id to check status.",
+            message=f"Dataset generation task has been queued for {len(request.datasets)} datasets with unified embedding management. Use the task_id to check status.",
         )
 
     except Exception as e:
@@ -1006,8 +1363,268 @@ async def delete_task(task_id: str):
     return {"message": "Task deleted successfully"}
 
 
+# === UNIFIED EMBEDDING MANAGEMENT ENDPOINTS ===
+
+
+@router.get("/embeddings/cache/stats")
+async def get_embedding_cache_stats(
+    embedding_manager: UnifiedEmbeddingManager = Depends(get_embedding_manager),
+):
+    """Get comprehensive embedding cache statistics"""
+    try:
+        stats = embedding_manager.get_cache_stats()
+        return {
+            "status": "success",
+            "cache_stats": stats,
+            "redis_healthy": embedding_manager.health_check(),
+        }
+    except Exception as e:
+        logger.error(f"Error getting cache stats: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error getting cache stats: {str(e)}"
+        )
+
+
+@router.post("/embeddings/cache/preload")
+async def preload_embeddings(
+    agencies: List[str],
+    topics: List[str],
+    embedding_manager: UnifiedEmbeddingManager = Depends(get_embedding_manager),
+):
+    """Manually preload topic embeddings for specified agencies and topics"""
+    try:
+        logger.info(
+            f"Manual preload request for {agencies} agencies and {topics} topics"
+        )
+
+        # Use bulk loading for efficiency
+        embeddings_by_context = embedding_manager.get_bulk_topic_embeddings(
+            agencies, topics
+        )
+
+        if embeddings_by_context:
+            return {
+                "status": "success",
+                "message": f"Successfully preloaded embeddings for {len(embeddings_by_context)} agency-topic combinations",
+                "agencies": agencies,
+                "topics": topics,
+                "combinations_loaded": len(embeddings_by_context),
+                "combinations": [f"{a}-{t}" for a, t in embeddings_by_context.keys()],
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Failed to preload embeddings - no combinations found",
+                "agencies": agencies,
+                "topics": topics,
+            }
+
+    except Exception as e:
+        logger.error(f"Error preloading embeddings: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error preloading embeddings: {str(e)}"
+        )
+
+
+@router.get("/embeddings/cache/check")
+async def check_embeddings_exist(
+    agency: str,
+    topic: str,
+    embedding_manager: UnifiedEmbeddingManager = Depends(get_embedding_manager),
+):
+    """Check if embeddings exist for specific agency-topic combination"""
+    try:
+        exists = embedding_manager.has_topic_embeddings(agency, topic)
+        embeddings_count = 0
+
+        if exists:
+            cached_embeddings = embedding_manager.get_topic_embeddings(agency, topic)
+            embeddings_count = len(cached_embeddings) if cached_embeddings else 0
+
+        return {
+            "agency": agency,
+            "topic": topic,
+            "exists": exists,
+            "embeddings_count": embeddings_count,
+        }
+
+    except Exception as e:
+        logger.error(f"Error checking embeddings: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error checking embeddings: {str(e)}"
+        )
+
+
+@router.delete("/embeddings/cache/persistent")
+async def clear_persistent_cache(
+    agency: Optional[str] = None,
+    topic: Optional[str] = None,
+    embedding_manager: UnifiedEmbeddingManager = Depends(get_embedding_manager),
+):
+    """Clear persistent embeddings cache (topic documents)"""
+    try:
+        if agency and topic:
+            # Clear specific agency-topic combination
+            success = embedding_manager.delete_topic_embeddings(agency, topic)
+            message = f"Cleared topic embeddings for {agency}-{topic}"
+        elif agency:
+            # Clear all topics for specific agency
+            success = embedding_manager.delete_topic_embeddings(agency)
+            message = f"Cleared all topic embeddings for agency {agency}"
+        else:
+            # Clear all topic embeddings
+            success = embedding_manager.clear_all_topic_embeddings()
+            message = "Cleared all topic embeddings"
+
+        if success:
+            return {"status": "success", "message": message}
+        else:
+            return {
+                "status": "error",
+                "message": f"Failed to clear embeddings: {message}",
+            }
+
+    except Exception as e:
+        logger.error(f"Error clearing persistent cache: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error clearing persistent cache: {str(e)}"
+        )
+
+
+@router.delete("/embeddings/cache/temporary")
+async def clear_temporary_cache(
+    session_id: Optional[str] = None,
+    embedding_manager: UnifiedEmbeddingManager = Depends(get_embedding_manager),
+):
+    """Clear temporary embeddings cache (questions)"""
+    try:
+        if session_id:
+            # Clear specific session
+            success = embedding_manager.cleanup_question_session(session_id)
+            message = f"Cleared question embeddings for session {session_id}"
+        else:
+            # Clear all question sessions
+            success = embedding_manager.clear_all_question_sessions()
+            message = "Cleared all question sessions"
+
+        if success:
+            return {"status": "success", "message": message}
+        else:
+            return {
+                "status": "error",
+                "message": f"Failed to clear embeddings: {message}",
+            }
+
+    except Exception as e:
+        logger.error(f"Error clearing temporary cache: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error clearing temporary cache: {str(e)}"
+        )
+
+
+@router.post("/embeddings/generate")
+async def generate_embeddings_for_agency_topic(
+    agency: str,
+    topic: str,
+    force_refresh: bool = False,
+    embedding_manager: UnifiedEmbeddingManager = Depends(get_embedding_manager),
+):
+    """Manually generate embeddings for specific agency-topic combination"""
+    try:
+        logger.info(
+            f"Manual generation request for {agency}-{topic} (force_refresh={force_refresh})"
+        )
+
+        embeddings = embedding_manager.get_topic_embeddings(
+            agency, topic, force_refresh=force_refresh
+        )
+
+        if embeddings:
+            return {
+                "status": "success",
+                "message": f"Successfully generated embeddings for {agency}-{topic}",
+                "agency": agency,
+                "topic": topic,
+                "embeddings_count": len(embeddings),
+                "force_refresh": force_refresh,
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Failed to generate embeddings for {agency}-{topic}",
+                "agency": agency,
+                "topic": topic,
+            }
+
+    except Exception as e:
+        logger.error(f"Error generating embeddings: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error generating embeddings: {str(e)}"
+        )
+
+
+@router.get("/embeddings/health")
+async def embedding_health_check(
+    embedding_manager: UnifiedEmbeddingManager = Depends(get_embedding_manager),
+):
+    """Check unified embedding system health"""
+    try:
+        redis_healthy = embedding_manager.health_check()
+        cache_stats = embedding_manager.get_cache_stats()
+
+        return {
+            "status": "healthy" if redis_healthy else "unhealthy",
+            "redis_healthy": redis_healthy,
+            "model_name": embedding_manager.model_name,
+            "topic_documents_path": embedding_manager.topic_documents_path,
+            "cache_stats": cache_stats,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+    except Exception as e:
+        logger.error(f"Error in embedding health check: {e}")
+        return {
+            "status": "unhealthy",
+            "redis_healthy": False,
+            "error": str(e),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+
 @router.get("/health")
 async def health_check(request: Request):
-    """Health check endpoint"""
-    provider_name = request.app.state.config.get("provider", {}).get("name", "unknown")
-    return {"status": "healthy", "version": "1.0.0", "provider": provider_name}
+    """Enhanced health check endpoint including Redis embedding system"""
+    try:
+        provider_name = request.app.state.config.get("provider", {}).get(
+            "name", "unknown"
+        )
+
+        # Check Redis health
+        try:
+            embedding_manager = get_embedding_manager(request)
+            redis_healthy = embedding_manager.health_check()
+            embedding_stats = embedding_manager.get_cache_stats()
+        except Exception as e:
+            redis_healthy = False
+            embedding_stats = {"error": str(e)}
+
+        overall_healthy = redis_healthy
+
+        return {
+            "status": "healthy" if overall_healthy else "degraded",
+            "version": "1.0.0",
+            "provider": provider_name,
+            "unified_embedding_system": {
+                "healthy": redis_healthy,
+                "stats": embedding_stats,
+            },
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+    except Exception as e:
+        logger.error(f"Error in health check: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }

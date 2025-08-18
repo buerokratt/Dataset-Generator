@@ -1,6 +1,26 @@
 version: '3'
 
+
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis-embeddings
+    ports:
+      - "6378:6379"
+    volumes:
+      - redis_data:/data
+      - ./config/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    environment:
+      - REDIS_REPLICATION_MODE=master
+    restart: unless-stopped
+    networks:
+      - dataset_gen_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
   ollama:
     build:
       context: .
