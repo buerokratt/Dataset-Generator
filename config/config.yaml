@@ -162,26 +162,65 @@ data_sources:
     patterns: ["**/cleaned.txt"]
     recursive: true
 
-# Relevance Score Analysis
-relevance_score:
-  enabled: true
-  embedding_model: "paraphrase-multilingual-mpnet-base-v2"
-  segment_weight: 0.6
-  query_weight: 0.3
-  term_weight: 0.1
-  threshold_good: 0.7
-  threshold_acceptable: 0.5
-  min_df: 1
-  max_df: 0.9
-  ngram_range: "(1, 2)"
 
-# Information Coverage Analysis
-information_coverage:
-  enabled: true
-  similarity_threshold: 0.5
 
 # Model settings
 models:
   embedding_model: "paraphrase-multilingual-mpnet-base-v2"
-  qualitative_model: "google/gemma-2-2b-it"
-  use_4bit_quantization: true
+
+
+# redis configuration
+redis:
+  # Redis connection URL - modify according to your setup
+  # url: "redis://localhost:6379"  # For local Redis
+  url: "redis://redis:6379"  # For Docker Compose setup
+  # url: "redis://:password@redis-host:6379"  # With password
+  
+  # Redis database number to use (0-15 typically available)
+  db: 0
+  
+  # Connection pool settings
+  max_connections: 10
+  retry_on_timeout: true
+  socket_timeout: 5
+  socket_connect_timeout: 5
+
+# Embedding-specific settings
+embedding:
+  # Path to topic documents
+  topic_documents_path: "/app/data"
+  
+  # TTL settings for different embedding types
+  ttl:
+    # Persistent embeddings (topic documents) - no expiration by default
+    persistent: null  # null means no expiration
+    # Temporary embeddings (questions) - expire after successful evaluation
+    temporary: 3600  # 1 hour in seconds
+    # Failed evaluation sessions - keep longer for potential retry
+    failed_session: 7200  # 2 hours in seconds
+
+# Evaluation configuration
+evaluation:
+  # Enable automatic embedding cleanup after successful evaluation
+  auto_cleanup_on_success: true
+  # Keep embeddings for failed evaluations (for potential retry)
+  keep_failed_embeddings: true
+  # Batch size for embedding operations
+  embedding_batch_size: 32
+  max_regeneration_attempts: 3
+  # Evaluation thresholds
+  thresholds:
+    topic_coverage_min: 0.7
+    information_coverage_min: 0.6
+    similarity_coverage_min: 0.6
+    overall_min: 0.65
+    context_coverage_min: 0.5
+
+# Monitoring and logging
+monitoring:
+  # Log cache hit/miss statistics
+  log_cache_stats: true
+  # Log embedding operations
+  log_embedding_operations: true
+  # Cache statistics reporting interval (seconds)
+  stats_interval: 300  # 5 minutes
