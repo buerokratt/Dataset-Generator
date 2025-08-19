@@ -8,11 +8,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY src/ /app/src/
-COPY config/ /app/config/
 COPY templates/ /app/templates/
 
+# Copy default configurations
+COPY config/ /app/config/
+COPY config/model_config.yaml /app/src/config/model_config.yaml
+
 # Create necessary directories
-RUN mkdir -p /app/user_configs
+RUN mkdir -p /app/user_configs /app/data /app/output_datasets /app/logs
+RUN chmod -R 755 /app/user_configs /app/data /app/output_datasets /app/logs
 
 # Set environment variables
 ENV PYTHONPATH=/app

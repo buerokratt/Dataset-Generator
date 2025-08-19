@@ -6,3 +6,8 @@ python-multipart
 pyyaml
 jinja2
 loguru==0.7.3
+httpx
+scikit-learn
+numpy
+sentence-transformers
+nltk

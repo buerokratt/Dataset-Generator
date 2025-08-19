@@ -30,12 +30,4 @@ RUN curl -fsSL https://ollama.com/install.sh | sh
 # Create required folders
 RUN mkdir -p /root/.ollama/models /root/config /root/scripts
 
-# Copy config and scripts
-COPY start.sh /root/start.sh
-COPY config/env.sh /root/config/env.sh
-COPY scripts/ollama-commands.sh /root/scripts/ollama-commands.sh
-
-RUN chmod +x /root/start.sh /root/config/env.sh /root/scripts/ollama-commands.sh
-
 EXPOSE 11434
-CMD ["/root/start.sh"]
