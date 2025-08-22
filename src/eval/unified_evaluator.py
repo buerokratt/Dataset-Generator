@@ -451,7 +451,6 @@ def eval_single_agency_level(
             "evaluation_time_ms": (time.time() - start_time) * 1000,
         }
 
-    # FIXED: Extract valid agency-topic pairs instead of cross product
     valid_pairs = _extract_valid_agency_topic_pairs_from_results(results)
     agencies = list(set(pair[0] for pair in valid_pairs))
     topics = list(set(pair[1] for pair in valid_pairs))
@@ -569,31 +568,24 @@ def _extract_valid_agency_topic_pairs_from_results(
 ) -> List[Tuple[str, str]]:
     """
     Extract valid agency-topic pairs from results, maintaining correct relationships.
-    This ensures we don't create cross-products of agencies and topics.
     """
     valid_pairs = []
 
     for i, result in enumerate(results):
-        # Extract agency and topic using the same logic as the embedding manager
+        # Extract agency and topic from source path (not output path)
         source_path = result.get("source", "")
-        output_path = result.get("output_path", "")
-
+        
         agency = f"agency{i + 1}"  # fallback
-        topic = f"topic{i + 1}"  # fallback
+        topic = f"topic{i + 1}"    # fallback
 
-        # Try to extract from source path first (more reliable)
+        # Try to extract from source path 
+        # Format: /app/data/sm_someuuid/d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97/cleaned.txt
         if source_path:
             source_parts = source_path.strip("/").split("/")
+            # Expected: ['app', 'data', 'sm_someuuid', 'd934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97', 'cleaned.txt']
             if len(source_parts) >= 4:
-                agency = source_parts[-3]
-                topic = source_parts[-2]
-        else:
-            # Fallback to output path
-            if output_path:
-                output_parts = output_path.strip("/").split("/")
-                if len(output_parts) >= 5:
-                    agency = output_parts[-3]
-                    topic = output_parts[-2]
+                agency = source_parts[-3]  # sm_someuuid
+                topic = source_parts[-2]    # d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97
 
         pair = (agency, topic)
         if pair not in valid_pairs:
@@ -606,68 +598,46 @@ def _extract_valid_agency_topic_pairs_from_results(
 def _extract_agencies_topics_from_results(
     results: List[Dict],
 ) -> Tuple[List[str], List[str]]:
-    """Extract agencies and topics from result dictionaries - DEPRECATED."""
+    """
+    Extract agencies and topics from result dictionaries - DEPRECATED.
+    Use _extract_valid_agency_topic_pairs_from_results instead.
+    """
     logger.warning(
         "Using deprecated _extract_agencies_topics_from_results - should use _extract_valid_agency_topic_pairs_from_results"
     )
-    agencies = set()
-    topics = set()
-
-    for i, result in enumerate(results):
-        # Use generic names as fallback
-        agency = f"agency{i + 1}"
-        topic = f"topic{i + 1}"
-
-        # Try to extract from source path first (more reliable)
-        source_path = result.get("source", "")
-        if source_path:
-            source_parts = source_path.strip("/").split("/")
-            if len(source_parts) >= 4:
-                agency = source_parts[-3]
-                topic = source_parts[-2]
-        else:
-            # Fallback to output path
-            output_path = result.get("output_path", "")
-            if output_path:
-                output_parts = output_path.strip("/").split("/")
-                if len(output_parts) >= 5:
-                    agency = output_parts[-3]
-                    topic = output_parts[-2]
-
-        agencies.add(agency)
-        topics.add(topic)
-
-    logger.info(f"Extracted agencies: {list(agencies)}, topics: {list(topics)}")
-    return list(agencies), list(topics)
-
+    
+    valid_pairs = _extract_valid_agency_topic_pairs_from_results(results)
+    
+    agencies = list(set(pair[0] for pair in valid_pairs))
+    topics = list(set(pair[1] for pair in valid_pairs))
+    
+    logger.info(f"Extracted agencies: {agencies}, topics: {topics}")
+    return agencies, topics
 
 def _extract_questions_from_results(
     results: List[Dict],
 ) -> Dict[Tuple[str, str], List[str]]:
-    """Extract questions from result files organized by context."""
+    """
+    Extract questions from result files organized by context.
+    """
     questions_by_context = defaultdict(list)
 
     for i, result in enumerate(results):
         output_path = result.get("output_path", "")
         source_path = result.get("source", "")
 
-        # Extract agency and topic using the same logic as _extract_valid_agency_topic_pairs_from_results
-        agency = f"agency{i + 1}"
-        topic = f"topic{i + 1}"
+        result_agency = f"agency{i + 1}"  # fallback
+        result_topic = f"topic{i + 1}"    # fallback
 
-        # Try to extract from source path first (more reliable)
         if source_path:
             source_parts = source_path.strip("/").split("/")
+            logger.debug(f"Source path parts for result {i}: {source_parts}")
+            
+            # Expected: ['app', 'data', 'sm_someuuid', 'd934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97', 'cleaned.txt']
             if len(source_parts) >= 4:
-                agency = source_parts[-3]
-                topic = source_parts[-2]
-        else:
-            # Fallback to output path
-            if output_path:
-                output_parts = output_path.strip("/").split("/")
-                if len(output_parts) >= 5:
-                    agency = output_parts[-3]
-                    topic = output_parts[-2]
+                result_agency = source_parts[-3]  # sm_someuuid
+                result_topic = source_parts[-2]    # d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97
+                logger.debug(f"Extracted agency={result_agency}, topic={result_topic} for result {i}")
 
         # Find the directory containing faqs.json
         faqs_dir = output_path
@@ -690,9 +660,11 @@ def _extract_questions_from_results(
                                 questions.append(question_text)
 
                     if questions:
-                        questions_by_context[(agency, topic)].extend(questions)
+                        # Use the specific variables for this iteration
+                        context_key = (result_agency, result_topic)
+                        questions_by_context[context_key].extend(questions)
                         logger.info(
-                            f"Extracted {len(questions)} questions for {agency}-{topic}"
+                            f"Extracted {len(questions)} questions for {result_agency}-{result_topic}"
                         )
 
             except Exception as e:
@@ -701,8 +673,6 @@ def _extract_questions_from_results(
             logger.warning(f"FAQ file not found: {faqs_path}")
 
     return dict(questions_by_context)
-
-
 # Compatibility functions
 def eval_with_context(
     results: List[Dict],

@@ -20,13 +20,28 @@ import re
 import os
 import json
 
+# Try to import sentence transformers
+try:
+    from sentence_transformers import SentenceTransformer
+
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+    logger.error(
+        "SentenceTransformers not available. Please install: pip install sentence-transformers"
+    )
+
+
 router = APIRouter()
 
 # Store for tracking background task status
 task_status_store = {}
 
+
 # Global unified embedding manager instance
 unified_embedding_manager = None
+model = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2")
+logger.info("Initialized SentenceTransformer model for unified embedding manager")
 
 
 def get_embedding_manager(request: Request) -> UnifiedEmbeddingManager:
@@ -48,6 +63,7 @@ def get_embedding_manager(request: Request) -> UnifiedEmbeddingManager:
         )
 
         unified_embedding_manager = UnifiedEmbeddingManager(
+            model=model,
             model_name=model_name,
             redis_url=redis_url,
             topic_documents_path=topic_documents_path,
@@ -411,7 +427,6 @@ async def process_single_dataset(
         final_evaluation_results = None
         best_evaluation = None
         best_results = None
-        eval_results = []
         while attempt < max_regeneration_attempts:
             attempt += 1
             logger.info(
@@ -488,7 +503,6 @@ async def process_single_dataset(
 
                     all_output_paths.append(result_path)
                     results.append({"source": source.path, "output_path": result_path})
-                    eval_results.append({"source": source.path, "output_path": result_path})
 
                 except Exception as source_error:
                     error_msg = f"Failed to generate dataset for source {source.path}: {str(source_error)}"
@@ -529,32 +543,20 @@ async def process_single_dataset(
                 # Extract unique agencies and topics from results for embedding preloading
                 agencies_for_evaluation = []
                 topics_for_evaluation = []
+                valid_pairs = []
+                for result in results:
+                    source_path = result["source"]
+                    source_parts = source_path.strip("/").split("/")
+                    if len(source_parts) >= 4:
+                        agency = source_parts[-3]  # sm_someuuid
+                        topic = source_parts[-2]    # d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97
+                        pair = (agency, topic)
+                        if pair not in valid_pairs:
+                            valid_pairs.append(pair)
+                    
+                    
 
-                for result in eval_results:
-                    output_path = result["output_path"]
-                    # Extract agency and topic from the output path structure
-                    # Expected format: output_dir/structure_name/agency_name/topic
-                    path_parts = (
-                        output_path.replace(output_dir, "").strip("/").split("/")
-                    )
-
-                    if len(path_parts) >= 3:
-                        extracted_agency = path_parts[1]  # agency_name
-                        extracted_topic = path_parts[2]  # topic
-
-                        if extracted_agency not in agencies_for_evaluation:
-                            agencies_for_evaluation.append(extracted_agency)
-                        if extracted_topic not in topics_for_evaluation:
-                            topics_for_evaluation.append(extracted_topic)
-
-                # Ensure we have agencies and topics for evaluation
-                if not agencies_for_evaluation:
-                    agencies_for_evaluation = (
-                        [agency_name] if agency_name else ["unknown"]
-                    )
-                if not topics_for_evaluation:
-                    topics_for_evaluation = ["unknown"]
-
+                
                 logger.info(
                     f"Preloading embeddings for evaluation: {agencies_for_evaluation} agencies, {topics_for_evaluation} topics"
                 )
@@ -562,15 +564,11 @@ async def process_single_dataset(
                 # Get unified embedding manager
                 embedding_manager = get_embedding_manager_from_config(config)
 
-                # Preload topic embeddings (generates and caches automatically)
-                # Pass the results so embedding manager can extract content from metadata.json
-                topic_embeddings_by_context = (
-                    embedding_manager.get_bulk_topic_embeddings(
-                        agencies_for_evaluation,
-                        topics_for_evaluation,
-                        results=results,  # Pass results for content extraction
-                    )
-                )
+                topic_embeddings_by_context = embedding_manager.get_embeddings_for_pairs(
+                valid_pairs, 
+                results=results  # Pass results for content extraction
+            )
+
 
                 preload_success = len(topic_embeddings_by_context) > 0
 
@@ -587,34 +585,29 @@ async def process_single_dataset(
                 logger.info("Generating question embeddings for evaluation")
                 questions_by_context = {}
 
-                for result in eval_results:
+                for result in results:
+                    source_path = result["source"]
                     output_path = result["output_path"]
                     # Try to read the generated FAQs to get questions
-                    faqs_path = os.path.join(output_path, "faqs.json")
+                    source_parts = source_path.strip("/").split("/")
+                    if len(source_parts) >=4: 
+                        result_agency = source_parts[-3]  # sm_someuuid
+                        result_topic = source_parts[-2]    # d934abece3ceaa55e41f3cfe0eb7ea6f97 
+                        
+                        faqs_path = os.path.join(output_path, "faqs.json")
 
-                    if os.path.exists(faqs_path):
-                        try:
-                            with open(faqs_path, "r", encoding="utf-8") as f:
-                                faqs = json.load(f)
+                        if os.path.exists(faqs_path):
+                            try:
+                                with open(faqs_path, "r", encoding="utf-8") as f:
+                                    faqs = json.load(f)
 
-                            if isinstance(faqs, list):
-                                # Extract agency and topic from path
-                                path_parts = (
-                                    output_path.replace(output_dir, "")
-                                    .strip("/")
-                                    .split("/")
-                                )
-                                if len(path_parts) >= 3:
-                                    result_agency = path_parts[1]
-                                    result_topic = path_parts[2]
-
+                                if isinstance(faqs, list):
                                     questions = []
                                     for faq in faqs:
                                         if isinstance(faq, dict) and "question" in faq:
                                             question_text = faq["question"].strip()
                                             if question_text:
                                                 questions.append(question_text)
-
                                     if questions:
                                         context_key = (result_agency, result_topic)
                                         if context_key not in questions_by_context:
@@ -622,12 +615,18 @@ async def process_single_dataset(
                                         questions_by_context[context_key].extend(
                                             questions
                                         )
+                                    
+                                        logger.info(
+                                        f"Extracted {len(questions)} questions for context {context_key}"
+                                        )
 
-                        except Exception as faq_error:
-                            logger.warning(
-                                f"Failed to read FAQs from {faqs_path}: {faq_error}"
-                            )
-
+                                
+                            except Exception as faq_error:
+                                logger.warning(
+                                    f"Failed to read FAQs from {faqs_path}: {faq_error}"
+                                )
+                    else:
+                        logger.warning(f"No FAQs found at {faqs_path}")
                 # Generate and cache question embeddings
                 if questions_by_context:
                     try:
@@ -662,7 +661,7 @@ async def process_single_dataset(
                 # Use smart evaluation with the embedding manager and session ID
                 embedding_manager = get_embedding_manager_from_config(config)
                 evaluation_results = eval_single_agency_level(
-                    results=eval_results,
+                    results=results,
                     embedding_manager=embedding_manager,
                     session_id=evaluation_session_id,
                 )
@@ -676,13 +675,13 @@ async def process_single_dataset(
                     "overall_score", 0
                 ) > best_evaluation.get("overall_score", 0):
                     best_evaluation = evaluation_results
-                    best_results = eval_results
+                    best_results = results
 
                 if not should_regenerate:
                     logger.info(
                         f"Evaluation passed on attempt {attempt}, stopping regeneration"
                     )
-                    final_results = eval_results
+                    final_results = results
                     final_evaluation_results = evaluation_results
                     break
                 else:
@@ -705,7 +704,7 @@ async def process_single_dataset(
                     "overall_score", 0
                 ) > best_evaluation.get("overall_score", 0):
                     best_evaluation = evaluation_results
-                    best_results = eval_results
+                    best_results = results
 
             # Clean up temporary embeddings if we're going to regenerate
             if (
@@ -729,25 +728,11 @@ async def process_single_dataset(
             final_results = best_results
             final_evaluation_results = best_evaluation
 
-        # === HANDLE EMBEDDING CLEANUP BASED ON FINAL EVALUATION RESULTS ===
-        try:
-            if (
-                evaluation_session_id
-                and final_evaluation_results
-                and final_evaluation_results.get("decision") == "ACCEPT"
-            ):
-                logger.info(
-                    "Final evaluation successful - cleaning up temporary question embeddings"
-                )
-                embedding_manager = get_embedding_manager_from_config(config)
-                embedding_manager.cleanup_question_session(evaluation_session_id)
-            elif evaluation_session_id:
-                logger.info(
-                    "Final evaluation failed - keeping question embeddings for potential reuse (will auto-expire)"
-                )
-                # Question embeddings will expire naturally based on TTL
-        except Exception as cleanup_error:
-            logger.warning(f"Error during final embedding cleanup: {cleanup_error}")
+        final_output_paths = []
+        if final_results:
+            for result in final_results:
+                final_output_paths.append(result["output_path"])
+        
 
         error_details["stage"] = "post_processing"
         # MODIFIED: Post-processing logic to handle cross-dataset aggregation
@@ -998,7 +983,7 @@ async def background_generate_bulk(
             if common_output_filename is None and dataset_request.output_filename:
                 common_output_filename = dataset_request.output_filename
 
-            # NEW: Store session_id from the first dataset (assuming all datasets in bulk have same session_id)
+            # Store session_id from the first dataset (assuming all datasets in bulk have same session_id)
             if (
                 session_id is None
                 and hasattr(dataset_request, "session_id")
@@ -1022,10 +1007,8 @@ async def background_generate_bulk(
                 # Collect individual output paths using _internal_results
                 if "_internal_results" in result:
                     for individual_result in result["_internal_results"]:
-                        # FIX: Get the actual JSON file path, not the directory path
                         output_path = individual_result["output_path"]
 
-                        # Check if it's a directory and find the JSON file
                         if os.path.isdir(output_path):
                             # Look for faqs.json in the directory
                             json_file_path = os.path.join(output_path, "faqs.json")
