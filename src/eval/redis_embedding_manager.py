@@ -15,17 +15,6 @@ import uuid
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Try to import sentence transformers
-try:
-    from sentence_transformers import SentenceTransformer
-
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
-    logger.error(
-        "SentenceTransformers not available. Please install: pip install sentence-transformers"
-    )
-
 
 @dataclass
 class EmbeddingRecord:
@@ -33,7 +22,7 @@ class EmbeddingRecord:
 
     id: int
     text_content: str
-    embedding_vector: List[float]  # Always required now
+    embedding_vector: List[float]  
     agency: str
     topic: str
     model_name: str
@@ -64,10 +53,11 @@ class UnifiedEmbeddingManager:
 
     def __init__(
         self,
+        model,
         model_name: str = "paraphrase-multilingual-mpnet-base-v2",
         redis_url: str = "redis://localhost:6379",
         redis_db: int = 0,
-        topic_documents_path: str = "topic_documents",
+        topic_documents_path: str = "/app/data",
     ):
         """
         Initialize unified embedding manager.
@@ -78,15 +68,10 @@ class UnifiedEmbeddingManager:
             redis_db: Redis database number
             topic_documents_path: Path to local topic documents (legacy, now optional)
         """
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            raise ImportError("SentenceTransformers required but not available")
-
-        self.model_name = model_name
         self.topic_documents_path = topic_documents_path
-
+        self.model_name = model_name
         # Initialize SentenceTransformer model
-        self.model = SentenceTransformer(model_name)
-        logger.info(f"Loaded SentenceTransformer model: {model_name}")
+        self.model = model
 
         # Initialize Redis client
         self.redis_client = redis.from_url(
@@ -190,31 +175,17 @@ class UnifiedEmbeddingManager:
                         logger.warning(f"No file_content in metadata: {metadata_path}")
                         continue
 
-                    # Extract agency and topic from source path
-                    # Source: /app/data/agencies/sm_someuuid/d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97/cleaned.txt
+
                     source_parts = source_path.strip("/").split("/")
+                    logger.debug(f"Source path parts: {source_parts}")
+                    
+                    # Expected structure: ['app', 'data', 'sm_someuuid', 'd934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97', 'cleaned.txt']
                     if len(source_parts) >= 4:
                         agency = source_parts[-3]  # sm_someuuid
-                        topic = source_parts[
-                            -2
-                        ]  # d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97
+                        topic = source_parts[-2]    # d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97
                     else:
-                        # Fallback to extracting from output path
-                        output_parts = output_path.strip("/").split("/")
-                        if len(output_parts) >= 3:
-                            agency = (
-                                output_parts[-3]
-                                if len(output_parts) >= 3
-                                else "unknown"
-                            )
-                            topic = (
-                                output_parts[-2]
-                                if len(output_parts) >= 2
-                                else "unknown"
-                            )
-                        else:
-                            agency = "unknown"
-                            topic = f"topic_{doc_id}"
+                        agency = "unknown"
+                        topic = f"topic_{doc_id}"
 
                     content_hash = hashlib.sha256(
                         file_content.encode("utf-8")
@@ -570,6 +541,10 @@ class UnifiedEmbeddingManager:
         """
         Get topic embeddings for agency-topic combination.
         """
+        if force_refresh:
+            # Delete existing embeddings to force regeneration
+            self.delete_topic_embeddings(agency, topic)
+            
         pairs = [(agency, topic)]
         results_dict = self.get_embeddings_for_pairs(pairs, results)
         return results_dict.get((agency, topic))
