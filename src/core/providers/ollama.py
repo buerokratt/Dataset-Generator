@@ -15,7 +15,7 @@ class OllamaProvider(ModelProvider):
         """Initialize with config dict or environment variables"""
         config = config or {}
         self.api_url = config.get("api_url") or os.getenv(
-            "PROVIDER_API_URL", "http://localhost:11434"
+            "PROVIDER_API_URL", "http://ollama:11434"
         )
         self.model_name = config.get("model_name") or os.getenv(
             "MODEL_NAME", "gemma3:1b-it-qat"
