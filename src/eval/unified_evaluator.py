@@ -574,18 +574,18 @@ def _extract_valid_agency_topic_pairs_from_results(
     for i, result in enumerate(results):
         # Extract agency and topic from source path (not output path)
         source_path = result.get("source", "")
-        
-        agency = f"agency{i + 1}"  # fallback
-        topic = f"topic{i + 1}"    # fallback
 
-        # Try to extract from source path 
+        agency = f"agency{i + 1}"  # fallback
+        topic = f"topic{i + 1}"  # fallback
+
+        # Try to extract from source path
         # Format: /app/data/sm_someuuid/d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97/cleaned.txt
         if source_path:
             source_parts = source_path.strip("/").split("/")
             # Expected: ['app', 'data', 'sm_someuuid', 'd934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97', 'cleaned.txt']
             if len(source_parts) >= 4:
                 agency = source_parts[-3]  # sm_someuuid
-                topic = source_parts[-2]    # d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97
+                topic = source_parts[-2]  # d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97
 
         pair = (agency, topic)
         if pair not in valid_pairs:
@@ -605,14 +605,15 @@ def _extract_agencies_topics_from_results(
     logger.warning(
         "Using deprecated _extract_agencies_topics_from_results - should use _extract_valid_agency_topic_pairs_from_results"
     )
-    
+
     valid_pairs = _extract_valid_agency_topic_pairs_from_results(results)
-    
+
     agencies = list(set(pair[0] for pair in valid_pairs))
     topics = list(set(pair[1] for pair in valid_pairs))
-    
+
     logger.info(f"Extracted agencies: {agencies}, topics: {topics}")
     return agencies, topics
+
 
 def _extract_questions_from_results(
     results: List[Dict],
@@ -627,17 +628,21 @@ def _extract_questions_from_results(
         source_path = result.get("source", "")
 
         result_agency = f"agency{i + 1}"  # fallback
-        result_topic = f"topic{i + 1}"    # fallback
+        result_topic = f"topic{i + 1}"  # fallback
 
         if source_path:
             source_parts = source_path.strip("/").split("/")
             logger.debug(f"Source path parts for result {i}: {source_parts}")
-            
+
             # Expected: ['app', 'data', 'sm_someuuid', 'd934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97', 'cleaned.txt']
             if len(source_parts) >= 4:
                 result_agency = source_parts[-3]  # sm_someuuid
-                result_topic = source_parts[-2]    # d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97
-                logger.debug(f"Extracted agency={result_agency}, topic={result_topic} for result {i}")
+                result_topic = source_parts[
+                    -2
+                ]  # d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97
+                logger.debug(
+                    f"Extracted agency={result_agency}, topic={result_topic} for result {i}"
+                )
 
         # Find the directory containing faqs.json
         faqs_dir = output_path
@@ -673,6 +678,8 @@ def _extract_questions_from_results(
             logger.warning(f"FAQ file not found: {faqs_path}")
 
     return dict(questions_by_context)
+
+
 # Compatibility functions
 def eval_with_context(
     results: List[Dict],

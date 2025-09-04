@@ -548,14 +548,13 @@ async def process_single_dataset(
                     source_parts = source_path.strip("/").split("/")
                     if len(source_parts) >= 4:
                         agency = source_parts[-3]  # sm_someuuid
-                        topic = source_parts[-2]    # d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97
+                        topic = source_parts[
+                            -2
+                        ]  # d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97
                         pair = (agency, topic)
                         if pair not in valid_pairs:
                             valid_pairs.append(pair)
-                    
-                    
 
-                
                 logger.info(
                     f"Preloading embeddings for evaluation: {agencies_for_evaluation} agencies, {topics_for_evaluation} topics"
                 )
@@ -563,11 +562,12 @@ async def process_single_dataset(
                 # Get unified embedding manager
                 embedding_manager = get_embedding_manager_from_config(config)
 
-                topic_embeddings_by_context = embedding_manager.get_embeddings_for_pairs(
-                valid_pairs, 
-                results=results  # Pass results for content extraction
-            )
-
+                topic_embeddings_by_context = (
+                    embedding_manager.get_embeddings_for_pairs(
+                        valid_pairs,
+                        results=results,  # Pass results for content extraction
+                    )
+                )
 
                 preload_success = len(topic_embeddings_by_context) > 0
 
@@ -589,10 +589,12 @@ async def process_single_dataset(
                     output_path = result["output_path"]
                     # Try to read the generated FAQs to get questions
                     source_parts = source_path.strip("/").split("/")
-                    if len(source_parts) >=4: 
+                    if len(source_parts) >= 4:
                         result_agency = source_parts[-3]  # sm_someuuid
-                        result_topic = source_parts[-2]    # d934abece3ceaa55e41f3cfe0eb7ea6f97 
-                        
+                        result_topic = source_parts[
+                            -2
+                        ]  # d934abece3ceaa55e41f3cfe0eb7ea6f97
+
                         faqs_path = os.path.join(output_path, "faqs.json")
 
                         if os.path.exists(faqs_path):
@@ -614,12 +616,11 @@ async def process_single_dataset(
                                         questions_by_context[context_key].extend(
                                             questions
                                         )
-                                    
+
                                         logger.info(
-                                        f"Extracted {len(questions)} questions for context {context_key}"
+                                            f"Extracted {len(questions)} questions for context {context_key}"
                                         )
 
-                                
                             except Exception as faq_error:
                                 logger.warning(
                                     f"Failed to read FAQs from {faqs_path}: {faq_error}"
@@ -730,7 +731,6 @@ async def process_single_dataset(
         if final_results:
             for result in final_results:
                 final_output_paths.append(result["output_path"])
-        
 
         error_details["stage"] = "post_processing"
         final_output_path = None

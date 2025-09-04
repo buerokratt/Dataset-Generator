@@ -39,7 +39,7 @@ ollama:
 
 # MAIN PROVIDER SELECTION - THIS IS THE KEY SETTING
 provider:
-  name: "ollama"  # THIS DETERMINES WHICH PROVIDER TO USE
+  name: "azure-openai"  # THIS DETERMINES WHICH PROVIDER TO USE
   timeout: 60
   max_retries: 3
   retry_delay: 5
