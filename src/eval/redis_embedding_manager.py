@@ -22,7 +22,7 @@ class EmbeddingRecord:
 
     id: int
     text_content: str
-    embedding_vector: List[float]  
+    embedding_vector: List[float]
     agency: str
     topic: str
     model_name: str
@@ -175,14 +175,15 @@ class UnifiedEmbeddingManager:
                         logger.warning(f"No file_content in metadata: {metadata_path}")
                         continue
 
-
                     source_parts = source_path.strip("/").split("/")
                     logger.debug(f"Source path parts: {source_parts}")
-                    
+
                     # Expected structure: ['app', 'data', 'sm_someuuid', 'd934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97', 'cleaned.txt']
                     if len(source_parts) >= 4:
                         agency = source_parts[-3]  # sm_someuuid
-                        topic = source_parts[-2]    # d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97
+                        topic = source_parts[
+                            -2
+                        ]  # d934abece3ce5ea3ceaa55e41f3cfe0eb7ea6f97
                     else:
                         agency = "unknown"
                         topic = f"topic_{doc_id}"
@@ -544,7 +545,7 @@ class UnifiedEmbeddingManager:
         if force_refresh:
             # Delete existing embeddings to force regeneration
             self.delete_topic_embeddings(agency, topic)
-            
+
         pairs = [(agency, topic)]
         results_dict = self.get_embeddings_for_pairs(pairs, results)
         return results_dict.get((agency, topic))

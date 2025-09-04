@@ -65,14 +65,13 @@ services:
       - ./data:/app/data
       - ./output_datasets:/app/output_datasets
       - ./logs:/app/logs
-    depends_on:
-      - ollama
     restart: unless-stopped
     networks:
       - dataset_gen_net
 
 volumes:
   ollama_models:
+  redis_data:
 
 networks:
   dataset_gen_net:
