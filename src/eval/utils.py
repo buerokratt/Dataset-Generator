@@ -7,7 +7,6 @@ import numpy as np
 import json
 import glob
 import os
-from constants import PREPROCESS_TEXT_PATTERN
 
 logger.remove()
 # add stdout handler
@@ -55,8 +54,10 @@ def load_stopwords() -> List[str]:
         with open(stopwords_file, "r", encoding="utf-8") as f:
             est_stopwords = [line.strip() for line in f if line.strip()]
         return est_stopwords
-    except:
-        logger.warning("Estonian stopwords file not found. Using default stopwords.")
+    except Exception as e:
+        logger.warning(
+            f"Estonian stopwords file not found. Using default stopwords. Error: {e}"
+        )
         return []
 
 
@@ -64,12 +65,7 @@ def preprocess_text(text: str) -> str:
     """Preprocess Estonian text."""
     text = text.lower()
 
-    text = re.sub(PREPROCESS_TEXT_PATTERN, "", text)
-
     text = re.sub(r"\s+", " ", text).strip()
-
-    estonian_chars = "äöüõÄÖÜÕ"
-    text = re.sub(f"[^a-zA-Z0-9{estonian_chars} ]", " ", text)
 
     return text
 

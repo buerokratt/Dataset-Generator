@@ -11,3 +11,12 @@ scikit-learn
 numpy
 sentence-transformers
 nltk
+# LangChain and AWS dependencies for Bedrock Anthropic provider
+langchain==0.3.8
+langchain-aws==0.2.4
+langchain-openai==0.2.9
+boto3==1.35.87
+tenacity==9.0.0
+
+# redis 
+redis==4.6.0
