@@ -192,8 +192,8 @@ BEDROCK_AWS_REGION=us-east-1
 BEDROCK_TPM_LIMIT=200000
 
 # AWS credentials
-AWS_ACCESS_KEY_ID=your_key
-AWS_SECRET_ACCESS_KEY=your_secret
+AWS_BEDROCK_ACCESS_KEY_ID=your_key
+AWS_BEDROCK_SECRET_ACCESS_KEY=your_secret
 ```
 
 ### YAML Configuration

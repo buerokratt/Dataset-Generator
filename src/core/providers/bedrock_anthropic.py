@@ -121,13 +121,13 @@ class BedrockAnthropicProvider(ModelProvider):
         """Initialize the LangChain ChatBedrock client with AWS credentials."""
         try:
             # Validate AWS credentials are available
-            aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
-            aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+            aws_access_key = os.getenv("AWS_BEDROCK_ACCESS_KEY_ID")
+            aws_secret_key = os.getenv("AWS_BEDROCK_SECRET_ACCESS_KEY")
 
             if not aws_access_key or not aws_secret_key:
                 logger.warning(
                     "AWS credentials not found in environment variables. "
-                    "Ensure AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are set, "
+                    "Ensure AWS_BEDROCK_ACCESS_KEY_ID and AWS_BEDROCK_SECRET_ACCESS_KEY are set, "
                     "or use IAM roles/instance profiles."
                 )
 
