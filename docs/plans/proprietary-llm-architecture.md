@@ -242,8 +242,8 @@ model_mappings:
 |----------|-------------|----------|---------|
 | `AWS_REGION` | AWS region | Yes | `us-east-1` |
 | `AWS_PROFILE` | AWS profile name | No | `default` |
-| `AWS_ACCESS_KEY_ID` | AWS access key | No* | `AKIA...` |
-| `AWS_SECRET_ACCESS_KEY` | AWS secret key | No* | `abc123...` |
+| `AWS_BEDROCK_ACCESS_KEY_ID` | AWS access key | No* | `AKIA...` |
+| `AWS_BEDROCK_SECRET_ACCESS_KEY` | AWS secret key | No* | `abc123...` |
 | `BEDROCK_MODEL_ID` | Bedrock model identifier | No | `anthropic.claude-3-5-sonnet-20240620-v1:0` |
 
 \* *Required if not using IAM roles or AWS profiles*
@@ -664,7 +664,7 @@ def validate_provider_config(provider_name: str, config: Dict[str, Any]):
     
     elif provider_name == "bedrock-anthropic":
         if not (os.getenv("AWS_PROFILE") or 
-                (os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY"))):
+                (os.getenv("AWS_BEDROCK_ACCESS_KEY_ID") and os.getenv("AWS_BEDROCK_SECRET_ACCESS_KEY"))):
             raise ConfigurationError("Missing AWS credentials")
 ```
 

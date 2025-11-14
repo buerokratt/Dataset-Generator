@@ -120,8 +120,8 @@ Edit `.env` with your AWS credentials:
 
 ```bash
 # AWS Credentials
-AWS_ACCESS_KEY_ID=your_access_key_here
-AWS_SECRET_ACCESS_KEY=your_secret_key_here
+AWS_BEDROCK_ACCESS_KEY_ID=your_access_key_here
+AWS_BEDROCK_SECRET_ACCESS_KEY=your_secret_key_here
 
 # Provider Selection
 PROVIDER_NAME=bedrock-anthropic
