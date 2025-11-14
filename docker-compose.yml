@@ -1,57 +1,9 @@
-version: '3'
-
-
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: redis-embeddings
-    ports:
-      - "6378:6379"
-    volumes:
-      - redis_data:/data
-      - ./config/redis.conf:/usr/local/etc/redis/redis.conf
-    command: redis-server /usr/local/etc/redis/redis.conf
-    environment:
-      - REDIS_REPLICATION_MODE=master
-    restart: unless-stopped
-    networks:
-      - dataset_gen_net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-  ollama:
-    build:
-      context: .
-      dockerfile: Dockerfile.ollama-gpu
-    image: synthesisai/dataset-generator-ollama:latest
-    container_name: ollama
-    ports:
-      - "11434:11434"
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - OLLAMA_USE_GPU=1
-      - OLLAMA_HOST=0.0.0.0
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu, utility, compute]
-    volumes:
-      - ollama_models:/root/.ollama
-      - ./scripts/ollama-entrypoint.sh:/ollama-entrypoint.sh
-    entrypoint: ["bash", "/ollama-entrypoint.sh"]
-    restart: unless-stopped
-    networks:
-      - dataset_gen_net
 
   synthetic-data-service:
     build:
       context: .
-      dockerfile: Dockerfile.service
+      dockerfile: Dockerfile
     image: synthesisai/dataset-generator:latest
     container_name: synthetic-data-service
     ports:
@@ -68,10 +20,6 @@ services:
     restart: unless-stopped
     networks:
       - dataset_gen_net
-
-volumes:
-  ollama_models:
-  redis_data:
 
 networks:
   dataset_gen_net:
