@@ -1110,17 +1110,62 @@ async def background_generate_bulk(
         callback_retries = callback_config.get("retries", 3)
 
         if callback_url:
-            # Clean up internal results before sending callback and add error summaries
+            # Create metrics directory
+            output_dir = config.get("directories", {}).get("output", "output_datasets")
+            metrics_dir = os.path.join(output_dir, "metrics")
+            os.makedirs(metrics_dir, exist_ok=True)
+
+            # Clean up results and prepare consolidated metrics
             cleaned_results = []
             total_generation_errors = 0
             error_categories = {}
+            consolidated_datasets_metrics = []
+            total_contexts_analyzed = 0
+            total_regeneration_attempts = 0
+            successful_scores = []
 
-            for result in all_results:
-                cleaned_result = result.copy()
-                if "_internal_results" in cleaned_result:
-                    del cleaned_result["_internal_results"]
+            for i, result in enumerate(all_results):
+                # Generate dataset_id
+                dataset_id = f"{common_output_filename or 'dataset'}_{i + 1}"
 
-                # Aggregate error information
+                # Create detailed metrics for consolidation
+                dataset_metrics = {
+                    "dataset_id": dataset_id,
+                    "dataset_metadata": result.get("dataset_metadata", {}),
+                    "success": result.get("success", False),
+                    "metrics": result.get("metrics", {}),
+                    "configuration_used": result.get("configuration_used", {}),
+                    "embedding_session_id": result.get("embedding_session_id"),
+                    "embedding_preload_success": result.get("embedding_preload_success", False),
+                    "regeneration_attempts": result.get("regeneration_attempts", 0),
+                    "max_regeneration_attempts": result.get("max_regeneration_attempts", 3),
+                    "generation_errors": result.get("generation_errors", []),
+                    "sources_processed": result.get("sources_processed"),
+                    "sources_successful": result.get("sources_successful"),
+                    "sources_failed": result.get("sources_failed"),
+                    "error_details": result.get("error_details"),
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+
+                # Include error message for failed datasets
+                if not result.get("success", False):
+                    dataset_metrics["error"] = result.get("error", "Unknown error")
+
+                consolidated_datasets_metrics.append(dataset_metrics)
+
+                # Create slim result for callback
+                cleaned_result = {
+                    "dataset_metadata": result.get("dataset_metadata", {}),
+                    "success": result.get("success", False)
+                }
+                
+                # Include error message for failed datasets in callback
+                if not result.get("success", False):
+                    cleaned_result["error"] = result.get("error", "Unknown error")
+
+                cleaned_results.append(cleaned_result)
+
+                # Aggregate summary statistics
                 if "generation_errors" in result:
                     total_generation_errors += len(result["generation_errors"])
 
@@ -1128,7 +1173,49 @@ async def background_generate_bulk(
                     category = result["error_details"].get("category", "unknown")
                     error_categories[category] = error_categories.get(category, 0) + 1
 
-                cleaned_results.append(cleaned_result)
+                # Aggregate metrics for summary
+                if result.get("success", False) and "metrics" in result:
+                    metrics = result["metrics"]
+                    total_contexts_analyzed += metrics.get("contexts_analyzed", 0)
+                    total_regeneration_attempts += result.get("regeneration_attempts", 0)
+                    overall_score = metrics.get("overall_score", 0)
+                    if overall_score > 0:
+                        successful_scores.append(overall_score)
+
+            # Create consolidated metrics file
+            consolidated_metrics = {
+                "task_id": task_id,
+                "session_id": session_id,
+                "processing_completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "datasets": consolidated_datasets_metrics,
+                "summary_metrics": {
+                    "total_datasets": len(request_data.datasets),
+                    "successful_datasets": successful_count,
+                    "failed_datasets": failed_count,
+                    "total_generation_errors": total_generation_errors,
+                    "error_categories": error_categories,
+                    "total_contexts_analyzed": total_contexts_analyzed,
+                    "total_regeneration_attempts": total_regeneration_attempts,
+                    "average_overall_score": sum(successful_scores) / len(successful_scores) if successful_scores else 0.0,
+                    "has_partial_failures": total_generation_errors > 0 and successful_count > 0
+                }
+            }
+
+            # Save consolidated metrics to single file
+            metrics_file_absolute_path = None
+            try:
+                metric_filename = f"{common_output_filename or 'task'}_full_metrics.json"
+                metric_file_path = os.path.join(metrics_dir, metric_filename)
+                
+                with open(metric_file_path, 'w', encoding='utf-8') as f:
+                    json.dump(consolidated_metrics, f, indent=2, ensure_ascii=False)
+                
+                metrics_file_absolute_path = metric_file_path
+                logger.info(f"Created consolidated metrics file: {metric_file_path}")
+                
+            except Exception as metric_error:
+                logger.warning(f"Failed to create consolidated metrics file: {metric_error}")
+                # Metrics file creation failed, will include fallback in callback
 
             # Enhanced callback payload with detailed error information
             callback_payload = {
@@ -1137,6 +1224,7 @@ async def background_generate_bulk(
                 "message": task_status_store[task_id]["message"],
                 "filePath": final_aggregated_path,
                 "results": cleaned_results,
+                "metrics_file": metrics_file_absolute_path,
                 "summary": {
                     "total_datasets": len(request_data.datasets),
                     "successful_datasets": successful_count,
