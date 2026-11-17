@@ -66,6 +66,10 @@ graph TB
             Ollama[Ollama GPU Service<br/>:11434<br/>synthesisai/dataset-generator-ollama:latest]
         end
         
+        subgraph "dragonfly Container"
+            Cache[Dragonfly Embedding Cache<br/>:6379<br/>ghcr.io/dragonflydb/dragonfly:v2.0.2]
+        end
+        
         subgraph "External (Optional)"
             MLflow[MLflow Tracking<br/>:5000]
         end
@@ -82,6 +86,7 @@ graph TB
     
     %% Service connections
     API <--> Ollama
+    API <-->|Redis protocol| Cache
     API -.-> MLflow
     
     %% Volume mounts
@@ -117,6 +122,15 @@ graph TB
 - **Ports**: `11434:11434`
 - **GPU**: CUDA-enabled with nvidia-docker runtime
 - **Models**: Persistent volume for Ollama models
+
+**dragonfly** (embedding cache, [`docker-compose.yml`](../docker-compose.yml)):
+- **Image**: `ghcr.io/dragonflydb/dragonfly:v2.0.2`, Redis-compatible
+- **Used by**: [`src/eval/embedding_cache_manager.py`](../src/eval/embedding_cache_manager.py) (`UnifiedEmbeddingManager`) through the standard Redis client
+- **Keys**: `embeddings:persistent:{agency}:{topic}` (topic embeddings, no TTL) and `embeddings:temp:{session_id}` (question embeddings, TTL)
+- **Connection**: `redis.url` in [`config/config.yaml`](../config/config.yaml), overridden by `REDIS_URL`
+- **Memory**: `DRAGONFLY_THREADS` (~256MiB each), `DRAGONFLY_MAXMEMORY`, `DRAGONFLY_MEM_LIMIT`; `--cache_mode=true` evicts old keys when full
+- **Persistence**: snapshot every 15 minutes to the `dragonfly_data` volume (no AOF; lost entries are regenerated on demand)
+- **Ports**: `127.0.0.1:6379` on the host only; the app waits for its health check before starting
 
 ## 4. Components (C4 L3)
 
@@ -318,6 +332,12 @@ MLFLOW_TRACKING_URI=http://mlflow:5000  # Experiment tracking
 SERVICE_DEBUG=false                     # Debug logging level
 SERVICE_HOST=0.0.0.0                   # Bind address
 SERVICE_PORT=8000                       # API port
+
+# Embedding Cache (Dragonfly)
+REDIS_URL=redis://dragonfly:6379        # Overrides redis.url in config.yaml
+DRAGONFLY_THREADS=2                     # ~256MiB per thread
+DRAGONFLY_MAXMEMORY=1gb
+DRAGONFLY_MEM_LIMIT=1280m
 ```
 
 ### User Configuration Override
@@ -368,7 +388,8 @@ services:
 
 - **Horizontal Scaling**: Multiple service instances with shared file system
 - **GPU Resources**: Ollama container requires NVIDIA GPU access
-- **Background Tasks**: In-memory task store (consider Redis for multi-instance)
+- **Background Tasks**: In-memory task store (consider moving it to the Dragonfly cache for multi-instance)
+- **Embedding Cache**: One Dragonfly instance can be shared by all service instances
 - **File I/O**: Shared storage recommended for multi-container deployments
 
 ## 8. Observability

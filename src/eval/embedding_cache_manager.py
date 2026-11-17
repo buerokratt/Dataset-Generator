@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime
 import numpy as np
 from collections import defaultdict
-import redis
+from urllib.parse import urlsplit, urlunsplit
+import redis  # Redis-protocol client; also used for Dragonfly
 import uuid
 
 # Configure logging
@@ -48,15 +49,20 @@ class EmbeddingRecord:
 
 class UnifiedEmbeddingManager:
     """
-    Unified embedding management system with Redis caching.
+    Unified embedding management system backed by a Redis-protocol cache
+    (Dragonfly by default; any Redis-compatible server works).
     """
+
+    # Keys fetched per SCAN round trip and deleted per DEL call
+    SCAN_COUNT = 500
+    DELETE_BATCH_SIZE = 500
 
     def __init__(
         self,
         model,
         model_name: str = "paraphrase-multilingual-mpnet-base-v2",
-        redis_url: str = "redis://localhost:6379",
-        redis_db: int = 0,
+        cache_url: str = "redis://localhost:6379",
+        cache_db: int = 0,
         topic_documents_path: str = "/app/data",
     ):
         """
@@ -64,8 +70,8 @@ class UnifiedEmbeddingManager:
 
         Args:
             model_name: SentenceTransformer model name
-            redis_url: Redis connection URL
-            redis_db: Redis database number
+            cache_url: Cache connection URL (redis:// scheme)
+            cache_db: Cache database number
             topic_documents_path: Path to local topic documents (legacy, now optional)
         """
         self.topic_documents_path = topic_documents_path
@@ -73,36 +79,53 @@ class UnifiedEmbeddingManager:
         # Initialize SentenceTransformer model
         self.model = model
 
-        # Initialize Redis client
-        self.redis_client = redis.from_url(
-            redis_url, db=redis_db, decode_responses=False
+        # Initialize cache client
+        self.cache_client = redis.from_url(
+            cache_url, db=cache_db, decode_responses=False
         )
 
-        # Test Redis connection
+        # Test cache connection
         if not self.health_check():
-            raise ConnectionError(f"Cannot connect to Redis at {redis_url}")
+            raise ConnectionError(
+                f"Cannot connect to embedding cache at {_redact_url(cache_url)}"
+            )
 
-        logger.info(f"Initialized UnifiedEmbeddingManager with Redis: {redis_url}")
+        logger.info(
+            f"Initialized UnifiedEmbeddingManager with cache: {_redact_url(cache_url)}"
+        )
 
-    # === REDIS CONNECTION METHODS ===
+    # === CACHE CONNECTION METHODS ===
 
     def health_check(self) -> bool:
-        """Check if Redis connection is healthy."""
+        """Check if the cache connection is healthy."""
         try:
-            self.redis_client.ping()
+            self.cache_client.ping()
             return True
         except Exception as e:
-            logger.error(f"Redis health check failed: {e}")
+            logger.error(f"Embedding cache health check failed: {e}")
             return False
+
+    # === KEY ITERATION ===
+
+    def _scan_keys(self, pattern: str) -> List[bytes]:
+        """List keys matching pattern with SCAN, which doesn't block the server like KEYS."""
+        return list(self.cache_client.scan_iter(match=pattern, count=self.SCAN_COUNT))
+
+    def _delete_keys(self, keys: List[bytes]) -> int:
+        """Delete keys in batches. Returns the number of keys deleted."""
+        deleted = 0
+        for i in range(0, len(keys), self.DELETE_BATCH_SIZE):
+            deleted += self.cache_client.delete(*keys[i : i + self.DELETE_BATCH_SIZE])
+        return deleted
 
     # === KEY GENERATION ===
 
     def _get_persistent_key(self, agency: str, topic: str) -> str:
-        """Generate Redis key for persistent topic embeddings."""
+        """Generate cache key for persistent topic embeddings."""
         return f"embeddings:persistent:{agency}:{topic}"
 
     def _get_temporary_key(self, session_id: str) -> str:
-        """Generate Redis key for temporary question embeddings."""
+        """Generate cache key for temporary question embeddings."""
         return f"embeddings:temp:{session_id}"
 
     # === SERIALIZATION ===
@@ -480,11 +503,11 @@ class UnifiedEmbeddingManager:
         embeddings_by_context = {}
         missing_pairs = []
 
-        # Check Redis cache for each pair
+        # Check cache for each pair
         for agency, topic in pairs:
-            redis_key = self._get_persistent_key(agency, topic)
+            cache_key = self._get_persistent_key(agency, topic)
             try:
-                cached_data = self.redis_client.get(redis_key)
+                cached_data = self.cache_client.get(cache_key)
                 if cached_data:
                     cached_embeddings = self._deserialize_embeddings(cached_data)
                     embeddings_by_context[(agency, topic)] = cached_embeddings
@@ -514,10 +537,9 @@ class UnifiedEmbeddingManager:
             # Cache each pair
             for (agency, topic), pair_embeddings in embeddings_by_pair.items():
                 if pair_embeddings:
-                    # Cache in Redis
-                    redis_key = self._get_persistent_key(agency, topic)
+                    cache_key = self._get_persistent_key(agency, topic)
                     serialized_data = self._serialize_embeddings(pair_embeddings)
-                    self.redis_client.set(redis_key, serialized_data)
+                    self.cache_client.set(cache_key, serialized_data)
 
                     # Add to results
                     embeddings_by_context[(agency, topic)] = pair_embeddings
@@ -568,8 +590,8 @@ class UnifiedEmbeddingManager:
 
     def has_topic_embeddings(self, agency: str, topic: str) -> bool:
         """Check if topic embeddings exist in cache."""
-        redis_key = self._get_persistent_key(agency, topic)
-        return self.redis_client.exists(redis_key) > 0
+        cache_key = self._get_persistent_key(agency, topic)
+        return self.cache_client.exists(cache_key) > 0
 
     def delete_topic_embeddings(self, agency: str, topic: Optional[str] = None) -> bool:
         """
@@ -581,16 +603,16 @@ class UnifiedEmbeddingManager:
         """
         try:
             if topic:
-                redis_key = self._get_persistent_key(agency, topic)
-                deleted = self.redis_client.delete(redis_key)
+                cache_key = self._get_persistent_key(agency, topic)
+                deleted = self.cache_client.delete(cache_key)
                 logger.info(
                     f"Deleted topic embeddings for {agency}-{topic}: {deleted} keys"
                 )
             else:
                 pattern = f"embeddings:persistent:{agency}:*"
-                keys = self.redis_client.keys(pattern)
+                keys = self._scan_keys(pattern)
                 if keys:
-                    deleted = self.redis_client.delete(*keys)
+                    deleted = self._delete_keys(keys)
                     logger.info(
                         f"Deleted all topic embeddings for {agency}: {deleted} keys"
                     )
@@ -657,7 +679,7 @@ class UnifiedEmbeddingManager:
 
         # Organize embeddings by context
         embeddings_by_context = defaultdict(dict)
-        flattened_for_redis = {}
+        flattened_for_cache = {}
 
         for question, embedding, (agency, topic) in zip(
             all_questions, all_question_embeddings, question_contexts
@@ -665,14 +687,14 @@ class UnifiedEmbeddingManager:
             # Store by context for return value
             embeddings_by_context[(agency, topic)][question] = embedding
 
-            # Store flattened for Redis
+            # Store flattened for the cache
             unique_key = f"{agency}|{topic}|{question}"
-            flattened_for_redis[unique_key] = embedding
+            flattened_for_cache[unique_key] = embedding
 
-        # Cache in Redis with TTL
-        redis_key = self._get_temporary_key(session_id)
-        serialized_data = self._serialize_question_embeddings(flattened_for_redis)
-        self.redis_client.setex(redis_key, ttl_seconds, serialized_data)
+        # Cache with TTL
+        cache_key = self._get_temporary_key(session_id)
+        serialized_data = self._serialize_question_embeddings(flattened_for_cache)
+        self.cache_client.setex(cache_key, ttl_seconds, serialized_data)
 
         logger.info(
             f"Generated and cached {len(all_questions)} question embeddings for session {session_id}"
@@ -691,10 +713,10 @@ class UnifiedEmbeddingManager:
         Returns:
             Dict mapping (agency, topic) to question embeddings, or None if not found
         """
-        redis_key = self._get_temporary_key(session_id)
+        cache_key = self._get_temporary_key(session_id)
 
         try:
-            cached_data = self.redis_client.get(redis_key)
+            cached_data = self.cache_client.get(cache_key)
             if not cached_data:
                 logger.warning(f"No question embeddings found for session {session_id}")
                 return None
@@ -730,8 +752,8 @@ class UnifiedEmbeddingManager:
             session_id: Session identifier to clean up
         """
         try:
-            redis_key = self._get_temporary_key(session_id)
-            deleted = self.redis_client.delete(redis_key)
+            cache_key = self._get_temporary_key(session_id)
+            deleted = self.cache_client.delete(cache_key)
             logger.info(
                 f"Cleaned up question session {session_id}: {deleted} keys deleted"
             )
@@ -746,9 +768,9 @@ class UnifiedEmbeddingManager:
     def clear_all_topic_embeddings(self) -> bool:
         """Clear all persistent topic embeddings."""
         try:
-            keys = self.redis_client.keys("embeddings:persistent:*")
+            keys = self._scan_keys("embeddings:persistent:*")
             if keys:
-                deleted = self.redis_client.delete(*keys)
+                deleted = self._delete_keys(keys)
                 logger.info(f"Cleared all topic embeddings: {deleted} keys")
             return True
         except Exception as e:
@@ -758,9 +780,9 @@ class UnifiedEmbeddingManager:
     def clear_all_question_sessions(self) -> bool:
         """Clear all temporary question embeddings."""
         try:
-            keys = self.redis_client.keys("embeddings:temp:*")
+            keys = self._scan_keys("embeddings:temp:*")
             if keys:
-                deleted = self.redis_client.delete(*keys)
+                deleted = self._delete_keys(keys)
                 logger.info(f"Cleared all question sessions: {deleted} keys")
             return True
         except Exception as e:
@@ -770,8 +792,8 @@ class UnifiedEmbeddingManager:
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get comprehensive cache statistics."""
         try:
-            persistent_keys = self.redis_client.keys("embeddings:persistent:*")
-            temp_keys = self.redis_client.keys("embeddings:temp:*")
+            persistent_keys = self._scan_keys("embeddings:persistent:*")
+            temp_keys = self._scan_keys("embeddings:temp:*")
 
             # Analyze persistent cache
             persistent_stats = {
@@ -792,7 +814,7 @@ class UnifiedEmbeddingManager:
 
                 # Count embeddings in this key
                 try:
-                    data = self.redis_client.get(key)
+                    data = self.cache_client.get(key)
                     if data:
                         embeddings = self._deserialize_embeddings(data)
                         total_persistent_embeddings += len(embeddings)
@@ -818,7 +840,7 @@ class UnifiedEmbeddingManager:
 
                 # Count embeddings
                 try:
-                    data = self.redis_client.get(key)
+                    data = self.cache_client.get(key)
                     if data:
                         embeddings = self._deserialize_question_embeddings(data)
                         total_temp_embeddings += len(embeddings)
@@ -828,17 +850,17 @@ class UnifiedEmbeddingManager:
             temp_stats["total_embeddings"] = total_temp_embeddings
             temp_stats["sessions_count"] = len(temp_stats["active_sessions"])
 
-            # Redis info
-            memory_info = self.redis_client.info("memory")
+            # Cache server info
+            memory_info = self.cache_client.info("memory")
 
             return {
                 "model_name": self.model_name,
                 "persistent_cache": persistent_stats,
                 "temporary_cache": temp_stats,
-                "redis_info": {
+                "cache_info": {
                     "used_memory": memory_info.get("used_memory_human", "N/A"),
                     "total_keys": len(persistent_keys) + len(temp_keys),
-                    "connected_clients": self.redis_client.info().get(
+                    "connected_clients": self.cache_client.info("clients").get(
                         "connected_clients", 0
                     ),
                     "health": self.health_check(),
@@ -850,18 +872,32 @@ class UnifiedEmbeddingManager:
             return {"error": str(e)}
 
 
+def _redact_url(url: str) -> str:
+    """Hide the password in a connection URL before logging it."""
+    parsed = urlsplit(url)
+    if parsed.password is None:
+        return url
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    user = parsed.username or ""
+    return urlunsplit(parsed._replace(netloc=f"{user}:***@{host}"))
+
+
 # Convenience functions for backward compatibility
 def create_embedding_manager(
+    model,
     model_name: str = "paraphrase-multilingual-mpnet-base-v2",
-    redis_url: str = None,
+    cache_url: str = None,
     topic_documents_path: str = "topic_documents",
 ) -> UnifiedEmbeddingManager:
     """Create a unified embedding manager with sensible defaults."""
-    if redis_url is None:
-        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    if cache_url is None:
+        cache_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
     return UnifiedEmbeddingManager(
+        model=model,
         model_name=model_name,
-        redis_url=redis_url,
+        cache_url=cache_url,
         topic_documents_path=topic_documents_path,
     )

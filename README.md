@@ -21,9 +21,12 @@ cd Dataset-Generator
 docker compose up -d
 ```
 
+This starts the API and Dragonfly, the Redis-compatible embedding cache used by the evaluation step. The API waits until Dragonfly is healthy.
+
 2. **Verify services are running:**
 ```bash
 curl http://localhost:8000/health
+curl http://localhost:8000/embeddings/health   # "cache_healthy": true
 ```
 
 3. **Generate your first dataset:**
@@ -59,12 +62,38 @@ services:
     environment:
       - PROVIDER_API_URL=http://your-llm-provider:11434
       - MLFLOW_TRACKING_URI=http://your-mlflow:5000
+      - REDIS_URL=redis://dragonfly:6379
     volumes:
       - ./your-templates:/app/templates
       - ./your-configs:/app/user_configs
       - ./your-data:/app/data
       - ./generated-datasets:/app/output_datasets
       - ./logs:/app/logs
+    networks:
+      - your-network
+    depends_on:
+      dragonfly:
+        condition: service_healthy
+
+  # Required: embedding cache for the evaluation step.
+  # See docker-compose.yml in this repo for the full flag set.
+  dragonfly:
+    image: ghcr.io/dragonflydb/dragonfly:v2.0.2
+    command:
+      - --proactor_threads=2
+      - --maxmemory=1gb
+      - --cache_mode=true
+      - --dir=/data
+      - --snapshot_cron=*/15 * * * *
+    mem_limit: 1280m
+    ulimits:
+      memlock: -1
+    volumes:
+      - dragonfly_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      retries: 10
     networks:
       - your-network
 
@@ -143,6 +172,29 @@ MLFLOW_TRACKING_URI=http://mlflow:5000      # Experiment tracking
 
 # Service
 SERVICE_DEBUG=false                         # Debug logging
+
+# Embedding cache (Dragonfly)
+REDIS_URL=redis://dragonfly:6379            # Overrides redis.url in config.yaml
+DRAGONFLY_THREADS=2                         # ~256MiB of memory per thread
+DRAGONFLY_MAXMEMORY=1gb                     # Must be >= threads x 256mb
+DRAGONFLY_MEM_LIMIT=1280m                   # Container limit, a bit above maxmemory
+```
+
+### Embedding cache
+
+The evaluation step caches topic and question embeddings in [Dragonfly](https://www.dragonflydb.io/), a Redis-compatible store. The app talks to it with the standard Redis client, so any Redis-protocol server works if you set `REDIS_URL`.
+
+- **Required:** `/generate-bulk` and `/embeddings/*` fail without it.
+- **Eviction:** `--cache_mode=true` evicts old keys near `maxmemory`. Without it, writes fail once memory is full.
+- **Persistence:** snapshots every 15 minutes to the `dragonfly_data` volume. A crash can lose up to 15 minutes of cached embeddings; they are regenerated on demand.
+- **Host:** Dragonfly needs Linux kernel 4.19 or later. Docker Desktop meets this.
+
+Inspect the cache from the host:
+
+```bash
+docker exec dataset-generator-dragonfly redis-cli info server | grep dragonfly_version
+docker exec dataset-generator-dragonfly redis-cli --scan --pattern 'embeddings:*'
+curl http://localhost:8000/embeddings/cache/stats
 ```
 
 ## API Usage
