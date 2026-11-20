@@ -62,7 +62,7 @@ services:
     environment:
       - PROVIDER_API_URL=http://your-llm-provider:11434
       - MLFLOW_TRACKING_URI=http://your-mlflow:5000
-      - REDIS_URL=redis://dragonfly:6379
+      - CACHE_URL=redis://dragonfly:6379
     volumes:
       - ./your-templates:/app/templates
       - ./your-configs:/app/user_configs
@@ -445,11 +445,11 @@ dataset-gen-service:
     url: "redis://gc-dragonfly:6379"
   ```
 
-  The `CALLBACK_URL` and `REDIS_URL` environment variables override these values.
+  GC still uses the old `redis:` section name, which the service reads as a deprecated alias for `cache:` (it logs a warning). Rename it to `cache:` once GC runs an image with this change. The `CALLBACK_URL` and `CACHE_URL` environment variables override these values.
 - **`.env`.** GC's `.env` sets `PROVIDER_NAME`, which overrides `provider.name`. It also holds the provider credentials: `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT_NAME` for `azure-openai`, or `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `BEDROCK_AWS_REGION` for `bedrock-anthropic`. See [Azure OpenAI setup](docs/azure-openai-setup.md) and [Bedrock setup](docs/bedrock-anthropic-setup.md).
 - **`user_configs/`.** GC's copy is the same as this repo's. The run uses `dataset_structures/single_question.yaml` and `prompts/institute_topic_question.txt`.
 - **`templates/`.** GC's folder is empty, so the mount hides the default templates in the image. The run does not need them, because the template registry looks in `user_configs/` first.
-- **`docker-compose-dataset-generation.yml`.** This older standalone file runs the service with a local Ollama container, `dataset-gen-ollama`, that uses `MODEL_NAME` (default `gemma3:1b-it-qat`). It has no Dragonfly service, so `/generate-bulk` fails with it unless a cache is reachable at `redis.url`.
+- **`docker-compose-dataset-generation.yml`.** This older standalone file runs the service with a local Ollama container, `dataset-gen-ollama`, that uses `MODEL_NAME` (default `gemma3:1b-it-qat`). It has no Dragonfly service, so `/generate-bulk` fails with it unless a cache is reachable at `cache.url`.
 
 If you change `config/config.yaml` or `user_configs/` in this repo, make the same change in GC's `DSL/DatasetGenerator/`. GC does not read the copies in this repo.
 
@@ -497,7 +497,7 @@ MLFLOW_TRACKING_URI=http://mlflow:5000      # Experiment tracking
 SERVICE_DEBUG=false                         # Debug logging
 
 # Embedding cache (Dragonfly)
-REDIS_URL=redis://dragonfly:6379            # Overrides redis.url in config.yaml
+CACHE_URL=redis://dragonfly:6379            # Cache URL (takes precedence over cache.url)
 DRAGONFLY_THREADS=2                         # ~256MiB of memory per thread
 DRAGONFLY_MAXMEMORY=1gb                     # Must be >= threads x 256mb
 DRAGONFLY_MEM_LIMIT=1280m                   # Container limit, a bit above maxmemory
@@ -505,7 +505,7 @@ DRAGONFLY_MEM_LIMIT=1280m                   # Container limit, a bit above maxme
 
 ### Embedding cache
 
-The evaluation step caches topic and question embeddings in [Dragonfly](https://www.dragonflydb.io/), a Redis-compatible store. The app talks to it with the standard Redis client, so any Redis-protocol server works if you set `REDIS_URL`.
+The evaluation step caches topic and question embeddings in [Dragonfly](https://www.dragonflydb.io/), a Redis-compatible store. The app talks to it with the standard Redis client, so any Redis-protocol server works if you set `CACHE_URL`. The old names `REDIS_URL` and the `redis:` config section still work but log a deprecation warning.
 
 - **Required:** `/generate-bulk` and `/embeddings/*` fail without it.
 - **Eviction:** `--cache_mode=true` evicts old keys near `maxmemory`. Without it, writes fail once memory is full.

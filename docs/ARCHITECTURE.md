@@ -127,7 +127,7 @@ graph TB
 - **Image**: `ghcr.io/dragonflydb/dragonfly:v2.0.2`, Redis-compatible
 - **Used by**: [`src/eval/embedding_cache_manager.py`](../src/eval/embedding_cache_manager.py) (`UnifiedEmbeddingManager`) through the standard Redis client
 - **Keys**: `embeddings:persistent:{agency}:{topic}` (topic embeddings, no TTL) and `embeddings:temp:{session_id}` (question embeddings, TTL)
-- **Connection**: `redis.url` in [`config/config.yaml`](../config/config.yaml), overridden by `REDIS_URL`
+- **Connection**: `CACHE_URL` in `.env`; falls back to `cache.url` in `config.yaml` (used by deployments that mount their own config, such as Global Classifier). The pre-migration names `REDIS_URL` and `redis:` are deprecated aliases.
 - **Memory**: `DRAGONFLY_THREADS` (~256MiB each), `DRAGONFLY_MAXMEMORY`, `DRAGONFLY_MEM_LIMIT`; `--cache_mode=true` evicts old keys when full
 - **Persistence**: snapshot every 15 minutes to the `dragonfly_data` volume (no AOF; lost entries are regenerated on demand)
 - **Ports**: `127.0.0.1:6379` on the host only; the app waits for its health check before starting
@@ -334,7 +334,7 @@ SERVICE_HOST=0.0.0.0                   # Bind address
 SERVICE_PORT=8000                       # API port
 
 # Embedding Cache (Dragonfly)
-REDIS_URL=redis://dragonfly:6379        # Overrides redis.url in config.yaml
+CACHE_URL=redis://dragonfly:6379        # Cache URL (takes precedence over cache.url)
 DRAGONFLY_THREADS=2                     # ~256MiB per thread
 DRAGONFLY_MAXMEMORY=1gb
 DRAGONFLY_MEM_LIMIT=1280m

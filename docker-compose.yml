@@ -25,7 +25,7 @@ services:
         condition: service_healthy
 
   # Redis-compatible embedding cache. The app reaches it at
-  # redis://dragonfly:6379 (redis.url in config/config.yaml, or REDIS_URL).
+  # redis://dragonfly:6379 (CACHE_URL in .env).
   # Same image and flags as the Global Classifier dev stack (gc-dragonfly).
   dragonfly:
     image: ghcr.io/dragonflydb/dragonfly:v2.0.2
@@ -60,8 +60,8 @@ services:
       start_period: 5s
 
   # Redis rollback option, kept for one release. To roll back: uncomment it,
-  # restore config/redis.conf from git, set redis.url in config/config.yaml
-  # to redis://redis:6379, and make synthetic-data-service depend on redis.
+  # restore config/redis.conf from git, set CACHE_URL in .env to
+  # redis://redis:6379, and make synthetic-data-service depend on redis.
   # redis:
   #   image: redis:7-alpine
   #   container_name: dataset-generator-redis

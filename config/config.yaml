@@ -167,12 +167,16 @@ models:
 
 
 # Embedding cache (Dragonfly, Redis-compatible)
-# The REDIS_URL environment variable overrides url.
-redis:
-  # Connection URL - modify according to your setup
-  # url: "redis://localhost:6379"  # From the host
-  url: "redis://dragonfly:6379"  # For Docker Compose setup
-  # url: "redis://:password@dragonfly:6379"  # With password
+# Renamed from `redis:`; the old section name and REDIS_URL still work but
+# log a deprecation warning.
+cache:
+  # Connection URL: set CACHE_URL in .env, which ConfigLoader loads into
+  # cache.url. The redis:// scheme is the Redis protocol Dragonfly speaks.
+  #   CACHE_URL=redis://dragonfly:6379            # Docker Compose
+  #   CACHE_URL=redis://localhost:6379            # App running on the host
+  #   CACHE_URL=redis://:password@dragonfly:6379  # With password
+  # Deployments that mount their own config.yaml (e.g. Global Classifier)
+  # can set url here instead; CACHE_URL takes precedence when both are set.
 
   # Database number to use (0-15 typically available)
   db: 0

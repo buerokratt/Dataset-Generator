@@ -17,21 +17,40 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def get_cache_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Return the embedding cache settings from config.
+
+    The section is `cache`. The legacy `redis` section from before the
+    Dragonfly migration is still read, with `cache` taking precedence, so
+    deployments with their own config.yaml (e.g. Global Classifier) keep
+    working until they rename it.
+    """
+    config = config or {}
+    legacy = config.get("redis") or {}
+    if legacy:
+        logger.warning(
+            "The 'redis' config section is deprecated; rename it to 'cache'."
+        )
+    return {**legacy, **(config.get("cache") or {})}
+
+
 def resolve_cache_url(config: Optional[Dict[str, Any]] = None) -> str:
     """Return the embedding cache URL.
 
-    Order: the REDIS_URL environment variable (set in .env), then redis.url
-    in config.yaml. Deployments such as Global Classifier set only redis.url
-    in their own config.yaml. There is no hardcoded default: a silent
-    localhost fallback is wrong inside Docker.
+    Order: the CACHE_URL environment variable (set in .env), the legacy
+    REDIS_URL variable, then url in the config's cache section (see
+    get_cache_config). There is no hardcoded default: a silent localhost
+    fallback is wrong inside Docker.
     """
-    cache_url = os.environ.get("REDIS_URL") or ((config or {}).get("redis") or {}).get(
-        "url"
-    )
+    cache_url = os.environ.get("CACHE_URL")
+    if not cache_url and os.environ.get("REDIS_URL"):
+        logger.warning("REDIS_URL is deprecated; rename it to CACHE_URL.")
+        cache_url = os.environ["REDIS_URL"]
+    cache_url = cache_url or get_cache_config(config).get("url")
     if not cache_url:
         raise ValueError(
-            "Embedding cache URL is not configured. Set REDIS_URL in .env "
-            "or redis.url in config/config.yaml."
+            "Embedding cache URL is not configured. Set CACHE_URL in .env "
+            "or cache.url in config/config.yaml."
         )
     return cache_url
 

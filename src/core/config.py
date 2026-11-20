@@ -178,8 +178,9 @@ class ConfigLoader:
             "CALLBACK_RETRY_BACKOFF": "callback.retry_backoff",
             "CALLBACK_INCLUDE_ERROR_DETAILS": "callback.include_error_details",
             "CALLBACK_INCLUDE_SUMMARY": "callback.include_summary",
-            # Embedding cache (Dragonfly / any Redis-protocol server)
-            "REDIS_URL": "redis.url",
+            # Embedding cache (Dragonfly / any Redis-protocol server). The
+            # legacy REDIS_URL is read directly by resolve_cache_url().
+            "CACHE_URL": "cache.url",
             # Directories
             "DATA_DIR": "directories.input",
             "OUTPUT_DIR": "directories.output",
