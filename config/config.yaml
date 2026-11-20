@@ -166,14 +166,19 @@ models:
   embedding_model: "paraphrase-multilingual-mpnet-base-v2"
 
 
-# redis configuration
-redis:
-  # Redis connection URL - modify according to your setup
-  # url: "redis://localhost:6379"  # For local Redis
-  url: "redis://redis:6379"  # For Docker Compose setup
-  # url: "redis://:password@redis-host:6379"  # With password
-  
-  # Redis database number to use (0-15 typically available)
+# Embedding cache (Dragonfly, Redis-compatible)
+# Renamed from `redis:`; the old section name and REDIS_URL still work but
+# log a deprecation warning.
+cache:
+  # Connection URL: set CACHE_URL in .env, which ConfigLoader loads into
+  # cache.url. The redis:// scheme is the Redis protocol Dragonfly speaks.
+  #   CACHE_URL=redis://dragonfly:6379            # Docker Compose
+  #   CACHE_URL=redis://localhost:6379            # App running on the host
+  #   CACHE_URL=redis://:password@dragonfly:6379  # With password
+  # Deployments that mount their own config.yaml (e.g. Global Classifier)
+  # can set url here instead; CACHE_URL takes precedence when both are set.
+
+  # Database number to use (0-15 typically available)
   db: 0
   
   # Connection pool settings

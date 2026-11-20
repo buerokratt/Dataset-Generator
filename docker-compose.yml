@@ -20,7 +20,72 @@ services:
     restart: unless-stopped
     networks:
       - dataset_gen_net
+    depends_on:
+      dragonfly:
+        condition: service_healthy
+
+  # Redis-compatible embedding cache. The app reaches it at
+  # redis://dragonfly:6379 (CACHE_URL in .env).
+  # Same image and flags as the Global Classifier dev stack (gc-dragonfly).
+  dragonfly:
+    image: ghcr.io/dragonflydb/dragonfly:v2.0.2
+    container_name: dataset-generator-dragonfly
+    command:
+      - --logtostderr
+      # Required: without it Dragonfly starts one thread per host CPU,
+      # each needing ~256MiB
+      - --proactor_threads=${DRAGONFLY_THREADS:-2}
+      - --maxmemory=${DRAGONFLY_MAXMEMORY:-1gb}
+      # Evict old keys near maxmemory, like Redis's allkeys-lru. Topic
+      # embeddings never expire, so without this writes fail once it's full.
+      - --cache_mode=true
+      - --dir=/data
+      - --dbfilename=dump
+      - --snapshot_cron=*/15 * * * *
+    mem_limit: ${DRAGONFLY_MEM_LIMIT:-1280m}
+    ulimits:
+      memlock: -1
+    ports:
+      - "127.0.0.1:${DRAGONFLY_HOST_PORT:-6379}:6379"
+    volumes:
+      - dragonfly_data:/data
+    restart: unless-stopped
+    networks:
+      - dataset_gen_net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # Redis rollback option, kept for one release. To roll back: uncomment it,
+  # restore config/redis.conf from git, set CACHE_URL in .env to
+  # redis://redis:6379, and make synthetic-data-service depend on redis.
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: dataset-generator-redis
+  #   ports:
+  #     - "127.0.0.1:6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+  #     - ./config/redis.conf:/usr/local/etc/redis/redis.conf
+  #   command: redis-server /usr/local/etc/redis/redis.conf
+  #   restart: unless-stopped
+  #   networks:
+  #     - dataset_gen_net
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 3s
+  #     retries: 3
 
 networks:
   dataset_gen_net:
     driver: bridge
+
+volumes:
+  dragonfly_data:
+    name: dataset_gen_dragonfly_data
+  # redis_data:
+  #   name: dataset_gen_redis_data

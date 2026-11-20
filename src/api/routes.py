@@ -8,8 +8,12 @@ from src.core.post_processor_factory import PostProcessorFactory
 # Import the corrected unified evaluator
 from src.eval.unified_evaluator import eval_single_agency_level
 
-# Import the unified Redis embedding manager
-from src.eval.redis_embedding_manager import UnifiedEmbeddingManager
+# Import the unified embedding cache manager
+from src.eval.embedding_cache_manager import (
+    UnifiedEmbeddingManager,
+    get_cache_config,
+    resolve_cache_url,
+)
 
 from pydantic import BaseModel, Field, field_validator
 from src.utils.logger import logger
@@ -46,18 +50,20 @@ logger.info("Initialized SentenceTransformer model for unified embedding manager
 
 def get_embedding_manager(request: Request) -> UnifiedEmbeddingManager:
     """Get or create unified embedding manager instance."""
+    return get_embedding_manager_from_config(request.app.state.config)
+
+
+def get_embedding_manager_from_config(config: dict) -> UnifiedEmbeddingManager:
+    """Get or create unified embedding manager from config dict."""
     global unified_embedding_manager
     if unified_embedding_manager is None:
-        # Get configuration from request
-        config = request.app.state.config
-
-        # Extract configuration
         model_name = config.get("models", {}).get(
             "embedding_model", "paraphrase-multilingual-mpnet-base-v2"
         )
-        redis_url = config.get("redis", {}).get(
-            "url", os.environ.get("REDIS_URL", "redis://localhost:6379")
-        )
+        # The `cache` config section holds the embedding cache (Dragonfly)
+        # settings. The URL comes from CACHE_URL, else cache.url.
+        cache_config = get_cache_config(config)
+        cache_url = resolve_cache_url(config)
         topic_documents_path = config.get("embedding", {}).get(
             "topic_documents_path", "topic_documents"
         )
@@ -65,35 +71,11 @@ def get_embedding_manager(request: Request) -> UnifiedEmbeddingManager:
         unified_embedding_manager = UnifiedEmbeddingManager(
             model=model,
             model_name=model_name,
-            redis_url=redis_url,
+            cache_url=cache_url,
+            cache_db=cache_config.get("db", 0),
             topic_documents_path=topic_documents_path,
         )
         logger.info("Initialized unified embedding manager")
-
-    return unified_embedding_manager
-
-
-def get_embedding_manager_from_config(config: dict) -> UnifiedEmbeddingManager:
-    """Get or create unified embedding manager from config dict."""
-    global unified_embedding_manager
-    if unified_embedding_manager is None:
-        # Extract configuration
-        model_name = config.get("models", {}).get(
-            "embedding_model", "paraphrase-multilingual-mpnet-base-v2"
-        )
-        redis_url = config.get("redis", {}).get(
-            "url", os.environ.get("REDIS_URL", "redis://localhost:6379")
-        )
-        topic_documents_path = config.get("embedding", {}).get(
-            "topic_documents_path", "topic_documents"
-        )
-
-        unified_embedding_manager = UnifiedEmbeddingManager(
-            model_name=model_name,
-            redis_url=redis_url,
-            topic_documents_path=topic_documents_path,
-        )
-        logger.info("Initialized unified embedding manager from config")
 
     return unified_embedding_manager
 
@@ -279,10 +261,10 @@ async def process_single_dataset(
     agency_name: str,
 ) -> dict:
     """
-    Process a single dataset generation request with Redis-based embedding caching.
+    Process a single dataset generation request with cached embeddings.
 
     This function handles the end-to-end logic for generating a synthetic dataset based on the parameters
-    provided in a DatasetRequest. It now includes Redis-based embedding management for better performance
+    provided in a DatasetRequest. It now includes embedding cache management for better performance
     and proper cleanup of temporary embeddings based on evaluation results.
 
     Args:
@@ -297,7 +279,7 @@ async def process_single_dataset(
               any errors encountered, and metadata about the dataset and configuration used.
 
     Notes:
-        - Now integrates with Redis for embedding management
+        - Now integrates with the embedding cache (Dragonfly)
         - Automatically cleans up temporary embeddings after successful evaluation
         - Keeps topic embeddings cached for future use
         - Supports both individual and bulk post-processing modes (e.g., zip, aggregation).
@@ -938,10 +920,10 @@ async def background_generate_bulk(
     data_generator: DataGenerator,
 ):
     """
-    Background task for processing bulk dataset generation requests with Redis-based embedding management.
+    Background task for processing bulk dataset generation requests with cached embeddings.
 
     This function is executed as a background task to generate multiple datasets in parallel, based on the list of
-    DatasetRequest objects provided in the BulkGenerateRequest. It now includes Redis-based embedding management
+    DatasetRequest objects provided in the BulkGenerateRequest. It now includes embedding cache management
     for better performance and memory management across datasets.
 
     Args:
@@ -955,7 +937,7 @@ async def background_generate_bulk(
 
     Notes:
         - Each dataset in the request is processed sequentially.
-        - Uses Redis for embedding caching and management.
+        - Uses the embedding cache (Dragonfly) for embedding caching and management.
         - Automatically cleans up temporary embeddings based on evaluation results.
         - Supports cross-dataset aggregation or zipping if configured.
         - Internal results and metadata are managed for advanced post-processing.
@@ -1329,15 +1311,13 @@ async def generate_bulk_dataset(
     data_generator: DataGenerator = Depends(get_data_generator),
 ):
     """
-    Generate multiple datasets in bulk as a background task with Redis-based embedding management.
+    Generate multiple datasets in bulk as a background task with cached embeddings.
 
     Accepts a list of datasets with flexible metadata and returns immediately with a task_id.
-    Now includes Redis-based embedding caching for improved performance and memory management.
+    Now includes embedding caching for improved performance and memory management.
     Supports callback notifications when processing is complete.
     """
-    logger.info(
-        "Received bulk dataset generation request with Redis embedding management"
-    )
+    logger.info("Received bulk dataset generation request with embedding cache")
     try:
         logger.info(
             f"Received bulk generation request for {len(request.datasets)} datasets"
@@ -1349,12 +1329,10 @@ async def generate_bulk_dataset(
                 status_code=400, detail="At least one dataset must be provided"
             )
 
-        # Check Redis health before starting
+        # Check cache health before starting
         if not get_embedding_manager(fastapi_request).health_check():
-            logger.error("Redis connection unhealthy")
-            raise HTTPException(
-                status_code=503, detail="Redis embedding cache unavailable"
-            )
+            logger.error("Embedding cache connection unhealthy")
+            raise HTTPException(status_code=503, detail="Embedding cache unavailable")
 
         # Generate unique task ID
         task_id = str(uuid.uuid4())
@@ -1372,7 +1350,7 @@ async def generate_bulk_dataset(
             "completed_datasets": 0,
             "results": [],
             "error": None,
-            "redis_enabled": True,
+            "cache_enabled": True,
         }
 
         # Add background task with unified embedding manager
@@ -1444,7 +1422,7 @@ async def get_embedding_cache_stats(
         return {
             "status": "success",
             "cache_stats": stats,
-            "redis_healthy": embedding_manager.health_check(),
+            "cache_healthy": embedding_manager.health_check(),
         }
     except Exception as e:
         logger.error(f"Error getting cache stats: {e}")
@@ -1637,12 +1615,12 @@ async def embedding_health_check(
 ):
     """Check unified embedding system health"""
     try:
-        redis_healthy = embedding_manager.health_check()
+        cache_healthy = embedding_manager.health_check()
         cache_stats = embedding_manager.get_cache_stats()
 
         return {
-            "status": "healthy" if redis_healthy else "unhealthy",
-            "redis_healthy": redis_healthy,
+            "status": "healthy" if cache_healthy else "unhealthy",
+            "cache_healthy": cache_healthy,
             "model_name": embedding_manager.model_name,
             "topic_documents_path": embedding_manager.topic_documents_path,
             "cache_stats": cache_stats,
@@ -1653,7 +1631,7 @@ async def embedding_health_check(
         logger.error(f"Error in embedding health check: {e}")
         return {
             "status": "unhealthy",
-            "redis_healthy": False,
+            "cache_healthy": False,
             "error": str(e),
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -1661,29 +1639,29 @@ async def embedding_health_check(
 
 @router.get("/health")
 async def health_check(request: Request):
-    """Enhanced health check endpoint including Redis embedding system"""
+    """Enhanced health check endpoint including the embedding cache"""
     try:
         provider_name = request.app.state.config.get("provider", {}).get(
             "name", "unknown"
         )
 
-        # Check Redis health
+        # Check embedding cache health
         try:
             embedding_manager = get_embedding_manager(request)
-            redis_healthy = embedding_manager.health_check()
+            cache_healthy = embedding_manager.health_check()
             embedding_stats = embedding_manager.get_cache_stats()
         except Exception as e:
-            redis_healthy = False
+            cache_healthy = False
             embedding_stats = {"error": str(e)}
 
-        overall_healthy = redis_healthy
+        overall_healthy = cache_healthy
 
         return {
             "status": "healthy" if overall_healthy else "degraded",
             "version": "1.0.0",
             "provider": provider_name,
             "unified_embedding_system": {
-                "healthy": redis_healthy,
+                "healthy": cache_healthy,
                 "stats": embedding_stats,
             },
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
