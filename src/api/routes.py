@@ -9,7 +9,7 @@ from src.core.post_processor_factory import PostProcessorFactory
 from src.eval.unified_evaluator import eval_single_agency_level
 
 # Import the unified embedding cache manager
-from src.eval.embedding_cache_manager import DEFAULT_CACHE_URL, UnifiedEmbeddingManager
+from src.eval.embedding_cache_manager import UnifiedEmbeddingManager, resolve_cache_url
 
 from pydantic import BaseModel, Field, field_validator
 from src.utils.logger import logger
@@ -57,11 +57,9 @@ def get_embedding_manager_from_config(config: dict) -> UnifiedEmbeddingManager:
             "embedding_model", "paraphrase-multilingual-mpnet-base-v2"
         )
         # The `redis` config section holds the embedding cache (Dragonfly)
-        # connection. REDIS_URL overrides redis.url via ConfigLoader.
-        cache_config = config.get("redis", {})
-        cache_url = cache_config.get(
-            "url", os.environ.get("REDIS_URL", DEFAULT_CACHE_URL)
-        )
+        # settings. The URL comes from REDIS_URL, else redis.url.
+        cache_config = config.get("redis") or {}
+        cache_url = resolve_cache_url(config)
         topic_documents_path = config.get("embedding", {}).get(
             "topic_documents_path", "topic_documents"
         )

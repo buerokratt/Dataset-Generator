@@ -16,8 +16,24 @@ import uuid
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Used only when neither REDIS_URL nor redis.url in config.yaml is set
-DEFAULT_CACHE_URL = "redis://localhost:6379"
+
+def resolve_cache_url(config: Optional[Dict[str, Any]] = None) -> str:
+    """Return the embedding cache URL.
+
+    Order: the REDIS_URL environment variable (set in .env), then redis.url
+    in config.yaml. Deployments such as Global Classifier set only redis.url
+    in their own config.yaml. There is no hardcoded default: a silent
+    localhost fallback is wrong inside Docker.
+    """
+    cache_url = os.environ.get("REDIS_URL") or ((config or {}).get("redis") or {}).get(
+        "url"
+    )
+    if not cache_url:
+        raise ValueError(
+            "Embedding cache URL is not configured. Set REDIS_URL in .env "
+            "or redis.url in config/config.yaml."
+        )
+    return cache_url
 
 
 @dataclass
@@ -64,7 +80,8 @@ class UnifiedEmbeddingManager:
         self,
         model,
         model_name: str = "paraphrase-multilingual-mpnet-base-v2",
-        cache_url: str = DEFAULT_CACHE_URL,
+        *,
+        cache_url: str,
         cache_db: int = 0,
         topic_documents_path: str = "/app/data",
     ):
@@ -896,7 +913,9 @@ def create_embedding_manager(
 ) -> UnifiedEmbeddingManager:
     """Create a unified embedding manager with sensible defaults."""
     if cache_url is None:
-        cache_url = os.environ.get("REDIS_URL", DEFAULT_CACHE_URL)
+        from src.core.config import app_config
+
+        cache_url = resolve_cache_url(app_config)
 
     return UnifiedEmbeddingManager(
         model=model,
