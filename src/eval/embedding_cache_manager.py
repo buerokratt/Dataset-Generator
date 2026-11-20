@@ -16,6 +16,9 @@ import uuid
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Used only when neither REDIS_URL nor redis.url in config.yaml is set
+DEFAULT_CACHE_URL = "redis://localhost:6379"
+
 
 @dataclass
 class EmbeddingRecord:
@@ -61,7 +64,7 @@ class UnifiedEmbeddingManager:
         self,
         model,
         model_name: str = "paraphrase-multilingual-mpnet-base-v2",
-        cache_url: str = "redis://localhost:6379",
+        cache_url: str = DEFAULT_CACHE_URL,
         cache_db: int = 0,
         topic_documents_path: str = "/app/data",
     ):
@@ -893,7 +896,7 @@ def create_embedding_manager(
 ) -> UnifiedEmbeddingManager:
     """Create a unified embedding manager with sensible defaults."""
     if cache_url is None:
-        cache_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+        cache_url = os.environ.get("REDIS_URL", DEFAULT_CACHE_URL)
 
     return UnifiedEmbeddingManager(
         model=model,
